@@ -1,4 +1,3 @@
-#include "common.h"
 #include "whisper.h"
 #include "common-sdl.h"
 #include <iostream>
@@ -161,6 +160,24 @@ void remove_bracketed_text(std::string& text) {
     text.resize(write - text.data());
 }
 
+void remove_bracketed_text(char* text) {
+    char *read = text, *write = text;
+    bool in_bracket = false, in_paren = false;
+
+    while (*read) {
+        if (!in_bracket && !in_paren) {
+            if (*read == '[')      { in_bracket = true; read++; continue; }
+            if (*read == '(')      { in_paren = true;   read++; continue; }
+            *write++ = *read++;
+        } else {
+            if (in_bracket && *read == ']') { in_bracket = false; read++; continue; }
+            if (in_paren   && *read == ')') { in_paren = false;   read++; continue; }
+            read++;
+        }
+    }
+    *write = '\0';  // Null-terminate
+}
+
 // Function to trim leading and trailing whitespace
 void lrtrim(std::string &s) {
     const char* whitespace = " \t\n\r\f\v";
@@ -172,6 +189,22 @@ void lrtrim(std::string &s) {
     size_t end = s.find_last_not_of(whitespace);
     s.erase(end + 1);
     s.erase(0, start);
+}
+
+void lrtrim(char* s) {
+    if (!s || !*s) return;  // Handle NULL/empty
+
+    // Trim leading whitespace
+    char* start = s;
+    while (*start && isspace((unsigned char)*start)) start++;
+
+    // Trim trailing whitespace
+    char* end = start + strlen(start);
+    while (end > start && isspace((unsigned char)*(end - 1))) end--;
+    *end = '\0';
+
+    // Shift back if needed
+    if (start != s) memmove(s, start, end - start + 1);
 }
 
 // Calculate Levenshtein distance between two strings
@@ -195,10 +228,73 @@ float levenshtein_distance(const std::string& s1, const std::string& s2) {
     return static_cast<float>(d[len1][len2]);
 }
 
+// Helper function to find minimum of three values
+static size_t min3(size_t a, size_t b, size_t c) {
+    if (a < b) return (a < c) ? a : c;
+    return (b < c) ? b : c;
+}
+
+float levenshtein_distance(const char* s1, const char* s2) {
+    size_t len1 = strlen(s1), len2 = strlen(s2);
+
+    // Handle empty strings
+    if (len1 == 0) return (float)len2;
+    if (len2 == 0) return (float)len1;
+
+    // Allocate two rows
+    size_t* prev_row = (size_t*)malloc((len2 + 1) * sizeof(size_t));
+    size_t* curr_row = (size_t*)malloc((len2 + 1) * sizeof(size_t));
+
+    // Check for allocation failure
+    if (!prev_row || !curr_row) {
+        free(prev_row);
+        free(curr_row);
+        return -1.0f;  // Error indicator
+    }
+
+    // Initialize first row
+    for (size_t j = 0; j <= len2; j++) {
+        prev_row[j] = j;
+    }
+
+    // Compute distance
+    for (size_t i = 1; i <= len1; i++) {
+        curr_row[0] = i;
+        for (size_t j = 1; j <= len2; j++) {
+            size_t cost = (s1[i-1] == s2[j-1]) ? 0 : 1;
+            curr_row[j] = min3(
+                curr_row[j-1] + 1,      // Insertion
+                prev_row[j] + 1,        // Deletion
+                prev_row[j-1] + cost    // Substitution
+                );
+        }
+
+        // Swap rows for next iteration
+        size_t* tmp = prev_row;
+        prev_row = curr_row;
+        curr_row = tmp;
+    }
+
+    float result = (float)prev_row[len2];
+
+    // Clean up
+    free(prev_row);
+    free(curr_row);
+
+    return result;
+}
+
 // Calculate similarity score (0 = identical, 1 = completely different)
 float string_similarity(const std::string& s1, const std::string& s2) {
     if (s1.empty() || s2.empty()) return 1.0f;
     float max_len = static_cast<float>(std::max(s1.size(), s2.size()));
+    return levenshtein_distance(s1, s2) / max_len;
+}
+
+float string_similarity(const char* s1, const char* s2) {
+    if (!s1 || !s2 || !*s1 || !*s2) return 1.0f;  // Handle empty strings
+    size_t len1 = strlen(s1), len2 = strlen(s2);
+    float max_len = (float)(len1 > len2 ? len1 : len2);
     return levenshtein_distance(s1, s2) / max_len;
 }
 
@@ -305,7 +401,7 @@ int main(int argc, char* argv[]) {
         wparams.language = "en";
         wparams.max_tokens = 32;
         wparams.no_timestamps = true;
-        wparams.n_threads = std::min(static_cast<int32_t>(std::thread::hardware_concurrency()/2), 10);
+        wparams.n_threads = std::min(static_cast<int32_t>(std::thread::hardware_concurrency()/2), 8);
         wparams.temperature = 0.0f;
         wparams.greedy.best_of = 1;
         wparams.single_segment = true;
