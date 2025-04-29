@@ -16,7 +16,6 @@
 
 namespace fs = std::filesystem;
 namespace beast = boost::beast;
-namespace http = beast::http;
 namespace websocket = beast::websocket;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
@@ -300,7 +299,7 @@ float string_similarity(const char* s1, const char* s2) {
 
 int main(int argc, char* argv[]) {
     // Initialize whisper context
-    std::string model_path = "models/ggml-medium.en-q5_0.bin";
+    std::string model_path = "models/ggml-small.en-q5_1.bin";
 
     // Check if a custom path was provided
     if (argc > 1) {
@@ -324,9 +323,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const int step_ms = 3000;
-    const int length_ms = 5000;
-    const int keep_ms = 200;
+    const int step_ms = 10000;
+    const int length_ms = 12000;
+    const int keep_ms = 1000;
     const int n_samples_30s  = (1e-3*30000.0)*WHISPER_SAMPLE_RATE;
     const int n_samples_len  = (1e-3*length_ms)*WHISPER_SAMPLE_RATE;
     const int n_samples_step = (1e-3*step_ms)*WHISPER_SAMPLE_RATE;
@@ -336,7 +335,7 @@ int main(int argc, char* argv[]) {
     std::vector<float> pcmf32_old;
 
     // Initialize audio capture
-    audio_async audio(10000);
+    audio_async audio(15000);
 
     if (!audio.init(-1, WHISPER_SAMPLE_RATE)) {
         std::cerr << "Failed to initialize audio capture.\n";
