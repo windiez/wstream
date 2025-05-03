@@ -35,14 +35,69 @@ endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# Detect CPU architecture and set march/mcpu flags
+set(MARCH_NATIVE "")  # Default to empty; fallback to -march=native later
+
+if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+    # Detect Apple M1/M2/M3 CPUs
+    execute_process(
+        COMMAND sysctl -n machdep.cpu.brand_string
+        OUTPUT_VARIABLE APPLE_CPU_BRAND
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    message(STATUS "Detected Apple CPU: ${APPLE_CPU_BRAND}")
+
+    if(APPLE_CPU_BRAND MATCHES "M3")
+        set(MARCH_NATIVE "-mcpu=apple-m3")
+    elseif(APPLE_CPU_BRAND MATCHES "M2")
+        set(MARCH_NATIVE "-mcpu=apple-m2")
+    elseif(APPLE_CPU_BRAND MATCHES "M1")
+        set(MARCH_NATIVE "-mcpu=apple-m1")
+    else()
+        message(WARNING "Unknown Apple Silicon CPU, using default flags")
+    endif()
+
+elseif(UNIX AND NOT APPLE)
+    find_program(LSCPU lscpu)
+    if(LSCPU)
+        execute_process(
+            COMMAND ${LSCPU}
+            OUTPUT_VARIABLE LSCPU_OUTPUT
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        string(REGEX MATCH "Model name:[^\n]+" CPU_LINE "${LSCPU_OUTPUT}")
+        string(REGEX REPLACE ".*Model name:[ \t]*" "" CPU_MODEL "${CPU_LINE}")
+
+        message(STATUS "Detected CPU model: ${CPU_MODEL}")
+
+        if(CPU_MODEL MATCHES "Zen 2")
+            set(MARCH_NATIVE "-march=znver2")
+        elseif(CPU_MODEL MATCHES "Zen 3")
+            set(MARCH_NATIVE "-march=znver3")
+        elseif(CPU_MODEL MATCHES "Zen 4")
+            set(MARCH_NATIVE "-march=znver4")
+        elseif(CPU_MODEL MATCHES "Alder Lake")
+            set(MARCH_NATIVE "-march=alderlake")
+        elseif(CPU_MODEL MATCHES "Ryzen AI 9 HX 370")
+            set(MARCH_NATIVE "-march=znver5")
+        endif()
+    endif()
+endif()
+
+if(MARCH_NATIVE STREQUAL "")
+    set(MARCH_NATIVE "-march=native")
+endif()
+
+message(STATUS "Using architecture-specific flags: ${MARCH_NATIVE}")
+
 string(
     APPEND opts
-        "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O3;-march=native;-std=c++20;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;-DNDEBUG>"
+        "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-std=c++20;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
         "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O0;-g3;-std=c++20;-D_GLIBCXX_DEBUG;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS>"
-        "$<$<AND:$<CONFIG:RELWITHDEBINFO>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O3;-g;-std=c++20;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer>"
-        "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O3;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;-DNDEBUG>"
+        "$<$<AND:$<CONFIG:RELWITHDEBINFO>,$<COMPILE_LANGUAGE:CXX>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-g;-std=c++20;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
+        "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
         "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O0;-g3;-D_GLIBCXX_DEBUG;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS>"
-        "$<$<AND:$<CONFIG:RELWITHDEBINFO>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O3;-g;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer>"
+        "$<$<AND:$<CONFIG:RELWITHDEBINFO>,$<COMPILE_LANGUAGE:C>>:-Wall;-Wno-deprecated-declarations;-O3;${MARCH_NATIVE};-g;-fPIC;-DBOOST_BIND_GLOBAL_PLACEHOLDERS;-flto;-fomit-frame-pointer;>"
 )
 add_compile_options("${opts}")
 
