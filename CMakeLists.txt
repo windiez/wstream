@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.14)
 project("wstream" C CXX)
 project("wstream" VERSION 0.0.1)
+# Set the list index policy to suppress warnings
+cmake_policy(SET CMP0121 NEW)
+
 include(CheckIncludeFileCXX)
 
 set(SOVERSION 1)
@@ -11,8 +14,20 @@ set(SOVERSION 1)
 # -DCMAKE_BUILD_TYPE=Release -GNinja -DGGML_BLAS_VENDOR=OpenBLAS
 
 # NO CUDA:
-# cmake .. -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DGGML_OPENMP=ON \
-# -DGGML_VULKAN=ON -DGGML_CUDA=OFF -DGGML_LTO=ON -DBUILD_SHARED_LIBS=OFF -GNinja
+# cmake .. \
+#   -DCMAKE_BUILD_TYPE=Release \
+#   -DGGML_NATIVE=OFF \
+#   -DGGML_OPENMP=ON \
+#   -DGGML_VULKAN=OFF \
+#   -DGGML_CUDA=OFF \
+#   -DGGML_LTO=ON \
+#   -DBUILD_SHARED_LIBS=OFF \
+#   -DGGML_AVX=ON \
+#   -DGGML_AVX2=ON \
+#   -DGGML_BMI2=ON \
+#   -DGGML_FMA=ON \
+#   -DGGML_F16C=ON \
+#   -GNinja
 
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)

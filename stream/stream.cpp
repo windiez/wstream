@@ -400,7 +400,7 @@ int main(int argc, char* argv[]) {
         wparams.language = "en";
         wparams.max_tokens = 32;
         wparams.no_timestamps = true;
-        wparams.n_threads = std::min(static_cast<int32_t>(std::thread::hardware_concurrency()/2), 8);
+        wparams.n_threads = std::min(static_cast<int32_t>(std::thread::hardware_concurrency()/2), 16);
         wparams.temperature = 0.0f;
         wparams.greedy.best_of = 1;
         wparams.single_segment = true;
