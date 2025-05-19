@@ -1,11 +1,13 @@
 #include "whisper.h"
 #include "common-sdl.h"
+#include "common.h"
+#include "common-whisper.h"
 #include <iostream>
-#include <set>
 #include <thread>
 #include <atomic>
 #include <string>
 #include <vector>
+#include <set>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -68,7 +70,6 @@ void do_session(tcp::socket socket, std::shared_ptr<shared_state> state) {
     websocket::stream<tcp::socket> ws{std::move(socket)};
     try {
         ws.accept();
-
         state->join(&ws);
 
         while (is_running) {
@@ -188,7 +189,6 @@ int main(int argc, char* argv[]) {
 
     struct whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = true;
-    cparams.flash_attn = false;
 
     struct whisper_context* ctx = whisper_init_from_file_with_params(model_path.c_str(), cparams);
     if (!ctx) {
@@ -196,19 +196,21 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const int step_ms = 10000;
-    const int length_ms = 12000;
-    const int keep_ms = 1000;
+    const int step_ms = 3000;     // Changed from 10000 to match the example
+    const int length_ms = 10000;  // Changed from 12000 to match the example
+    const int keep_ms = 200;      // Changed from 1000 to match the example
+
     const int n_samples_30s  = (1e-3*30000.0)*WHISPER_SAMPLE_RATE;
     const int n_samples_len  = (1e-3*length_ms)*WHISPER_SAMPLE_RATE;
     const int n_samples_step = (1e-3*step_ms)*WHISPER_SAMPLE_RATE;
     const int n_samples_keep = (1e-3*keep_ms)*WHISPER_SAMPLE_RATE;
+
     std::vector<float> pcmf32(n_samples_30s, 0.0f);
     std::vector<float> pcmf32_new(n_samples_30s, 0.0f);
     std::vector<float> pcmf32_old;
 
     // Initialize audio capture
-    audio_async audio(15000);
+    audio_async audio(length_ms);
 
     if (!audio.init(-1, WHISPER_SAMPLE_RATE)) {
         std::cerr << "Failed to initialize audio capture.\n";
@@ -220,66 +222,90 @@ int main(int argc, char* argv[]) {
     auto state = std::make_shared<shared_state>();
     std::thread ws_thread(websocket_server, state);
 
+    const bool use_vad = false;
+    auto t_last = std::chrono::high_resolution_clock::now();
+    const auto t_start = t_last;
+
     while (is_running) {
         is_running = sdl_poll_events();
         if (!is_running) {
             break;
         }
 
-        // Capture audio
-        while (true) {
-            // handle Ctrl + C
-            is_running = sdl_poll_events();
-            if (!is_running) {
-                break;
-            }
-            audio.get(step_ms, pcmf32_new);
+        // Process new audio using VAD when appropriate
+        if (!use_vad) {
+            // Original continuous processing logic
+            while (true) {
+                is_running = sdl_poll_events();
+                if (!is_running) {
+                    break;
+                }
+                audio.get(step_ms, pcmf32_new);
 
-            if ((int) pcmf32_new.size() > 2*n_samples_step) {
-                fprintf(stderr, "\n\n%s: WARNING: cannot process audio fast enough, dropping audio ...\n\n", __func__);
-                audio.clear();
+                if ((int) pcmf32_new.size() > 2*n_samples_step) {
+                    std::cerr << "WARNING: cannot process audio fast enough, dropping audio..." << std::endl;
+                    audio.clear();
+                    continue;
+                }
+
+                if ((int) pcmf32_new.size() >= n_samples_step) {
+                    audio.clear();
+                    break;
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+
+            const int n_samples_new = pcmf32_new.size();
+            const int n_samples_take = std::min((int) pcmf32_old.size(), std::max(0, n_samples_keep + n_samples_len - n_samples_new));
+
+            pcmf32.resize(n_samples_new + n_samples_take);
+
+            for (int i = 0; i < n_samples_take; i++) {
+                pcmf32[i] = pcmf32_old[pcmf32_old.size() - n_samples_take + i];
+            }
+
+            memcpy(pcmf32.data() + n_samples_take, pcmf32_new.data(), n_samples_new*sizeof(float));
+            pcmf32_old = pcmf32;
+        } else {
+            // New VAD-based processing from the example
+            const auto t_now = std::chrono::high_resolution_clock::now();
+            const auto t_diff = std::chrono::duration_cast<std::chrono::milliseconds>(t_now - t_last).count();
+
+            if (t_diff < 2000) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 continue;
             }
 
-            if ((int) pcmf32_new.size() >= n_samples_step) {
-                audio.clear();
-                break;
+            audio.get(2000, pcmf32_new);
+
+            // Only process audio if speech is detected
+            const float vad_thold = 0.6f;
+            const float freq_thold = 100.0f;
+            if (::vad_simple(pcmf32_new, WHISPER_SAMPLE_RATE, 1000, vad_thold, freq_thold, false)) {
+                audio.get(length_ms, pcmf32);
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            t_last = t_now;
         }
-
-        const int n_samples_new = pcmf32_new.size();
-        // take up to params.length_ms audio from previous iteration
-        const int n_samples_take = std::min((int) pcmf32_old.size(), std::max(0, n_samples_keep + n_samples_len - n_samples_new));
-
-        pcmf32.resize(n_samples_new + n_samples_take);
-
-        for (int i = 0; i < n_samples_take; i++) {
-            pcmf32[i] = pcmf32_old[pcmf32_old.size() - n_samples_take + i];
-        }
-
-        memcpy(pcmf32.data() + n_samples_take, pcmf32_new.data(), n_samples_new*sizeof(float));
-
-        pcmf32_old = pcmf32;
 
         if (pcmf32.empty()) continue;
 
-        // Run inference only if speech is detected
+        // Run inference
         whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
         wparams.print_progress = false;
         wparams.print_realtime = false;
-        wparams.no_context = true; // Disable context carryover
+        wparams.no_context = true;
         wparams.language = "en";
-        wparams.max_tokens = 32;
-        wparams.no_timestamps = true;
-        wparams.n_threads = std::min(static_cast<int32_t>(std::thread::hardware_concurrency()/2), 16);
+        // Updated to match example's thread count
+        wparams.n_threads = std::min(4, (int32_t) std::thread::hardware_concurrency());
         wparams.temperature = 0.0f;
-        wparams.greedy.best_of = 1;
-        wparams.single_segment = true;
+        wparams.single_segment = !use_vad;
+        wparams.max_tokens = 32;
         wparams.audio_ctx = 0;
-        wparams.prompt_tokens = nullptr;
-        wparams.prompt_n_tokens = 0;
 
         if (whisper_full(ctx, wparams, pcmf32.data(), pcmf32.size()) != 0) {
             std::cerr << "Failed to process audio.\n";
@@ -297,10 +323,9 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // Remove partial bracketed text (e.g., [inaudible], [ Background Conversations ])
+            // Move text processing to a separate thread or do it more efficiently
+            // For now, just continue with the original approach
             remove_bracketed_text(current_transcription);
-
-            // Trim leading and trailing whitespace
             lrtrim(current_transcription);
 
             // Skip if the transcription is empty after cleaning
@@ -308,24 +333,24 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
-            std::cout << current_transcription << std::endl; // Print the new content
+            std::cout << current_transcription << std::endl;
 
             nlohmann::json transcribe_message = {
                 {"type", "transcribe"},
                 {"content", current_transcription}
             };
 
-            // Broadcast the new content to WebSocket clients
+            // Broadcast to WebSocket clients
             state->broadcast(transcribe_message.dump());
 
             last_transcription = current_transcription;
         }
 
-        // keep part of the audio for next iteration to try to mitigate word boundary issues
+        // Keep part of the audio for next iteration
         pcmf32_old = std::vector<float>(pcmf32.end() - n_samples_keep, pcmf32.end());
     }
 
-    std::cout << "CTRL-C again to exit..." << std::endl;
+    std::cout << "Shutting down..." << std::endl;
     audio.pause();
     SDL_Quit();
     is_running = false;
