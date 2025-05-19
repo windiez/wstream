@@ -26,45 +26,49 @@ using tcp = net::ip::tcp;
 // Global flags
 std::atomic<bool> is_running(true);
 
-// Thread-safe queue for transcriptions
-struct TranscriptionQueue {
-    std::queue<std::string> queue;
-    std::mutex mutex;
+// Lock-free concurrent queue for transcriptions
+class TranscriptionQueue {
+private:
+    moodycamel::ConcurrentQueue<std::string> queue;
+    std::atomic<bool> new_data{false};
     std::condition_variable cond;
+    std::mutex mutex;
 
+public:
     void push(const std::string& transcription) {
-        std::lock_guard<std::mutex> lock(mutex);
-        queue.push(transcription);
+        queue.enqueue(transcription);
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            new_data.store(true);
+        }
         cond.notify_one();
     }
 
     bool pop(std::string& transcription) {
-        std::unique_lock<std::mutex> lock(mutex);
-        if (queue.empty()) {
-            return false;
-        }
-        transcription = queue.front();
-        queue.pop();
-        return true;
+        return queue.try_dequeue(transcription);
     }
 
     bool wait_and_pop(std::string& transcription, int timeout_ms) {
+        // First try a quick non-blocking dequeue
+        if (queue.try_dequeue(transcription)) {
+            return true;
+        }
+
+        // If empty, wait for notification or timeout
         std::unique_lock<std::mutex> lock(mutex);
         if (cond.wait_for(lock, std::chrono::milliseconds(timeout_ms),
-            [this] { return !queue.empty() || !is_running.load(); })) {
-            if (!is_running.load()) return false;
-            transcription = queue.front();
-            queue.pop();
-        return true;
+            [this] { return new_data.load() || !is_running.load(); })) {
+            new_data.store(false);
+        if (!is_running.load()) return false;
+        return queue.try_dequeue(transcription);
             }
             return false;
     }
 };
 
-moodycamel::ConcurrentQueue<std::string> transcription_queue;
-
 // Shared state for WebSocket server (optimized)
 class shared_state {
+private:
     std::set<websocket::stream<tcp::socket>*> m_connections;
     std::mutex m_mutex;
     // Pre-allocated buffers
@@ -195,13 +199,11 @@ void websocket_server(std::shared_ptr<shared_state> state) {
 }
 
 // Broadcasting thread
-void broadcast_thread(std::shared_ptr<shared_state> state, moodycamel::ConcurrentQueue<std::string>& queue) {
+void broadcast_thread(std::shared_ptr<shared_state> state, TranscriptionQueue& queue) {
     std::string transcription;
     while (is_running) {
-        if (queue.try_dequeue(transcription)) {
+        if (queue.wait_and_pop(transcription, 100)) {
             state->broadcast(transcription);
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Small sleep to avoid busy-waiting
         }
     }
 }
@@ -287,7 +289,8 @@ int main(int argc, char* argv[]) {
     // Optimize context parameters
     struct whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = true;
-    cparams.gpu_device = 0; // Select specific GPU if multiple are available
+    // Set compute capabilities if using CUDA
+    // cparams.gpu_device = 0; // Select specific GPU if multiple are available
 
     struct whisper_context* ctx = whisper_init_from_file_with_params(model_path.c_str(), cparams);
     if (!ctx) {
@@ -320,8 +323,7 @@ int main(int argc, char* argv[]) {
     audio.resume();
 
     // Set up transcription queue
-    //TranscriptionQueue transcription_queue;
-    moodycamel::ConcurrentQueue<std::string> transcription_queue;
+    TranscriptionQueue transcription_queue;
 
     // Start the WebSocket server
     auto state = std::make_shared<shared_state>();
@@ -351,8 +353,9 @@ int main(int argc, char* argv[]) {
             break;
         }
 
-        // Process audio (non-VAD case)
+        // Process audio
         if (!use_vad) {
+            // Non-VAD case: process audio in fixed-step chunks
             while (true) {
                 is_running = sdl_poll_events();
                 if (!is_running) {
@@ -385,6 +388,27 @@ int main(int argc, char* argv[]) {
 
             memcpy(pcmf32.data() + n_samples_take, pcmf32_new.data(), n_samples_new*sizeof(float));
             pcmf32_old = pcmf32;
+        } else {
+            const auto t_now  = std::chrono::high_resolution_clock::now();
+            const auto t_diff = std::chrono::duration_cast<std::chrono::milliseconds>(t_now - t_last).count();
+
+            if (t_diff < 2000) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+                continue;
+            }
+
+            audio.get(2000, pcmf32_new);
+
+            if (::vad_simple(pcmf32_new, WHISPER_SAMPLE_RATE, 1000, 0.85f, 100.0f, false)) {
+                audio.get(length_ms, pcmf32);
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+                continue;
+            }
+
+            t_last = t_now;
         }
 
         if (pcmf32.empty()) continue;
@@ -418,8 +442,7 @@ int main(int argc, char* argv[]) {
                 std::cout << processed_text << std::endl;
 
                 // Queue for broadcasting instead of immediate broadcast
-                //transcription_queue.push(processed_text);
-                transcription_queue.enqueue(processed_text);
+                transcription_queue.push(processed_text);
             }
         }
 
