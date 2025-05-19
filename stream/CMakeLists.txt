@@ -29,7 +29,6 @@ target_link_libraries(${TARGET} PRIVATE
     common
     common-sdl
     whisper
-#    ggml-blas
     nlohmann_json::nlohmann_json
     Boost::system
     ${CMAKE_THREAD_LIBS_INIT})
