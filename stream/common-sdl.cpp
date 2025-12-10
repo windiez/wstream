@@ -165,6 +165,9 @@ void audio_async::callback(uint8_t * stream, int len) {
         m_audio_pos = (m_audio_pos + n_samples) % m_audio.size();
         m_audio_len = std::min(m_audio_len + n_samples, m_audio.size());
     }
+
+    // OPTIMIZATION: Wake up any threads waiting for audio
+    m_cv.notify_one();
 }
 
 void audio_async::get(int ms, std::vector<float> & result) {
@@ -208,6 +211,31 @@ void audio_async::get(int ms, std::vector<float> & result) {
             memcpy(result.data(), &m_audio[s0], n_samples * sizeof(float));
         }
     }
+}
+
+// OPTIMIZATION: Wait efficiently until specified ms of audio is available
+bool audio_async::wait_for_audio(int ms, int timeout_ms) {
+    if (!m_dev_id_in) {
+        fprintf(stderr, "%s: no audio device to wait for audio from!\n", __func__);
+        return false;
+    }
+
+    if (!m_running) {
+        fprintf(stderr, "%s: not running!\n", __func__);
+        return false;
+    }
+
+    size_t n_samples_needed = (m_sample_rate * ms) / 1000;
+
+    std::unique_lock<std::mutex> lock(m_mutex);
+
+    // Wait until we have enough audio or timeout
+    bool success = m_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+        [this, n_samples_needed]() {
+            return m_audio_len >= n_samples_needed;
+        });
+
+    return success;
 }
 
 bool sdl_poll_events() {

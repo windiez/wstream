@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
 
 //
 // SDL Audio capture
@@ -31,6 +32,9 @@ public:
     // get audio data from the circular buffer
     void get(int ms, std::vector<float> & audio);
 
+    // wait until specified ms of audio is available (OPTIMIZED)
+    bool wait_for_audio(int ms, int timeout_ms = 5000);
+
 private:
     SDL_AudioDeviceID m_dev_id_in = 0;
 
@@ -39,6 +43,7 @@ private:
 
     std::atomic_bool m_running;
     std::mutex       m_mutex;
+    std::condition_variable m_cv;  // Signal audio availability
 
     std::vector<float> m_audio;
     size_t             m_audio_pos = 0;
