@@ -36,6 +36,15 @@ typedef void (* fattn_kernel_t)(
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
 
+typedef float (*vec_dot_KQ_f32_t)(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
+
+typedef float (*vec_dot_KQ_f16_t)(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
+
+typedef float (*dequantize_1_f32_t)(const void * __restrict__ vx, const int64_t i);
+typedef half  (*dequantize_1_f16_t)(const void * __restrict__ vx, const int64_t i);
+
 template <int D, int nthreads>
 static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_f16(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds_v) {
@@ -523,6 +532,176 @@ static __device__ __forceinline__ void dequantize_V_q8_0(const void * __restrict
     } else {
         static_assert(std::is_same_v<T, void>, "unsupported type");
     }
+}
+
+// Dequantize single element functions for f32
+static __device__ __forceinline__ float dequantize_1_f16_f32(const void * __restrict__ vx, const int64_t i) {
+    return __half2float(((const half *) vx)[i]);
+}
+
+static __device__ __forceinline__ float dequantize_1_q4_0_f32(const void * __restrict__ vx, const int64_t i) {
+    const block_q4_0 * x = (const block_q4_0 *) vx;
+    const int64_t ib = i / QK4_0;
+    const int     iqs = i % QK4_0;
+    const int8_t  q = (x[ib].qs[iqs/2] >> (4 * (iqs % 2))) & 0x0F;
+    return __half2float(x[ib].d) * (q - 8);
+}
+
+static __device__ __forceinline__ float dequantize_1_q4_1_f32(const void * __restrict__ vx, const int64_t i) {
+    const block_q4_1 * x = (const block_q4_1 *) vx;
+    const int64_t ib = i / QK4_1;
+    const int     iqs = i % QK4_1;
+    const int8_t  q = (x[ib].qs[iqs/2] >> (4 * (iqs % 2))) & 0x0F;
+    const float2 dm = __half22float2(x[ib].dm);
+    return dm.x * q + dm.y;
+}
+
+static __device__ __forceinline__ float dequantize_1_q5_0_f32(const void * __restrict__ vx, const int64_t i) {
+    const block_q5_0 * x = (const block_q5_0 *) vx;
+    const int64_t ib = i / QK5_0;
+    const int     iqs = i % QK5_0;
+    const int8_t  ql = (x[ib].qs[iqs/2] >> (4 * (iqs % 2))) & 0x0F;
+    const int8_t  qh = ((x[ib].qh[iqs/8] >> (iqs % 8)) & 1) << 4;
+    return __half2float(x[ib].d) * ((ql | qh) - 16);
+}
+
+static __device__ __forceinline__ float dequantize_1_q5_1_f32(const void * __restrict__ vx, const int64_t i) {
+    const block_q5_1 * x = (const block_q5_1 *) vx;
+    const int64_t ib = i / QK5_1;
+    const int     iqs = i % QK5_1;
+    const int8_t  ql = (x[ib].qs[iqs/2] >> (4 * (iqs % 2))) & 0x0F;
+    const int8_t  qh = ((x[ib].qh[iqs/8] >> (iqs % 8)) & 1) << 4;
+    const float2 dm = __half22float2(x[ib].dm);
+    return dm.x * (ql | qh) + dm.y;
+}
+
+static __device__ __forceinline__ float dequantize_1_q8_0_f32(const void * __restrict__ vx, const int64_t i) {
+    const block_q8_0 * x = (const block_q8_0 *) vx;
+    const int64_t ib = i / QK8_0;
+    const int     iqs = i % QK8_0;
+    return __half2float(x[ib].d) * x[ib].qs[iqs];
+}
+
+// Dequantize single element functions for f16
+static __device__ __forceinline__ half dequantize_1_f16_f16(const void * __restrict__ vx, const int64_t i) {
+    return ((const half *) vx)[i];
+}
+
+static __device__ __forceinline__ half dequantize_1_q4_0_f16(const void * __restrict__ vx, const int64_t i) {
+    const block_q4_0 * x = (const block_q4_0 *) vx;
+    const int64_t ib = i / QK4_0;
+    const int     iqs = i % QK4_0;
+    const int8_t  q = (x[ib].qs[iqs/2] >> (4 * (iqs % 2))) & 0x0F;
+    return x[ib].d * __int2half_rn(q - 8);
+}
+
+static __device__ __forceinline__ half dequantize_1_q4_1_f16(const void * __restrict__ vx, const int64_t i) {
+    const block_q4_1 * x = (const block_q4_1 *) vx;
+    const int64_t ib = i / QK4_1;
+    const int     iqs = i % QK4_1;
+    const int8_t  q = (x[ib].qs[iqs/2] >> (4 * (iqs % 2))) & 0x0F;
+    const half2 dm = x[ib].dm;
+    return __low2half(dm) * __int2half_rn(q) + __high2half(dm);
+}
+
+static __device__ __forceinline__ half dequantize_1_q5_0_f16(const void * __restrict__ vx, const int64_t i) {
+    const block_q5_0 * x = (const block_q5_0 *) vx;
+    const int64_t ib = i / QK5_0;
+    const int     iqs = i % QK5_0;
+    const int8_t  ql = (x[ib].qs[iqs/2] >> (4 * (iqs % 2))) & 0x0F;
+    const int8_t  qh = ((x[ib].qh[iqs/8] >> (iqs % 8)) & 1) << 4;
+    return x[ib].d * __int2half_rn((ql | qh) - 16);
+}
+
+static __device__ __forceinline__ half dequantize_1_q5_1_f16(const void * __restrict__ vx, const int64_t i) {
+    const block_q5_1 * x = (const block_q5_1 *) vx;
+    const int64_t ib = i / QK5_1;
+    const int     iqs = i % QK5_1;
+    const int8_t  ql = (x[ib].qs[iqs/2] >> (4 * (iqs % 2))) & 0x0F;
+    const int8_t  qh = ((x[ib].qh[iqs/8] >> (iqs % 8)) & 1) << 4;
+    const half2 dm = x[ib].dm;
+    return __low2half(dm) * __int2half_rn(ql | qh) + __high2half(dm);
+}
+
+static __device__ __forceinline__ half dequantize_1_q8_0_f16(const void * __restrict__ vx, const int64_t i) {
+    const block_q8_0 * x = (const block_q8_0 *) vx;
+    const int64_t ib = i / QK8_0;
+    const int     iqs = i % QK8_0;
+    return x[ib].d * __int2half_rn(x[ib].qs[iqs]);
+}
+
+// Helper function to get vec_dot function for f32
+template <int D>
+constexpr __device__ vec_dot_KQ_f32_t get_vec_dot_KQ_f32(ggml_type type_K) {
+    if (type_K == GGML_TYPE_F16) {
+        return vec_dot_fattn_vec_KQ_f16<D, D>;
+    } else if (type_K == GGML_TYPE_Q4_0) {
+        return vec_dot_fattn_vec_KQ_q4_0<D, D>;
+    } else if (type_K == GGML_TYPE_Q4_1) {
+        return vec_dot_fattn_vec_KQ_q4_1<D, D>;
+    } else if (type_K == GGML_TYPE_Q5_0) {
+        return vec_dot_fattn_vec_KQ_q5_0<D, D>;
+    } else if (type_K == GGML_TYPE_Q5_1) {
+        return vec_dot_fattn_vec_KQ_q5_1<D, D>;
+    } else if (type_K == GGML_TYPE_Q8_0) {
+        return vec_dot_fattn_vec_KQ_q8_0<D, D>;
+    }
+    return nullptr;
+}
+
+// Helper function to get vec_dot function for f16
+template <int D>
+constexpr __device__ vec_dot_KQ_f16_t get_vec_dot_KQ_f16(ggml_type type_K) {
+    if (type_K == GGML_TYPE_F16) {
+        return vec_dot_fattn_vec_KQ_f16<D, D>;
+    } else if (type_K == GGML_TYPE_Q4_0) {
+        return vec_dot_fattn_vec_KQ_q4_0<D, D>;
+    } else if (type_K == GGML_TYPE_Q4_1) {
+        return vec_dot_fattn_vec_KQ_q4_1<D, D>;
+    } else if (type_K == GGML_TYPE_Q5_0) {
+        return vec_dot_fattn_vec_KQ_q5_0<D, D>;
+    } else if (type_K == GGML_TYPE_Q5_1) {
+        return vec_dot_fattn_vec_KQ_q5_1<D, D>;
+    } else if (type_K == GGML_TYPE_Q8_0) {
+        return vec_dot_fattn_vec_KQ_q8_0<D, D>;
+    }
+    return nullptr;
+}
+
+// Helper function to get dequantize_1 function for f32
+constexpr __device__ dequantize_1_f32_t get_dequantize_1_f32(ggml_type type_V) {
+    if (type_V == GGML_TYPE_F16) {
+        return dequantize_1_f16_f32;
+    } else if (type_V == GGML_TYPE_Q4_0) {
+        return dequantize_1_q4_0_f32;
+    } else if (type_V == GGML_TYPE_Q4_1) {
+        return dequantize_1_q4_1_f32;
+    } else if (type_V == GGML_TYPE_Q5_0) {
+        return dequantize_1_q5_0_f32;
+    } else if (type_V == GGML_TYPE_Q5_1) {
+        return dequantize_1_q5_1_f32;
+    } else if (type_V == GGML_TYPE_Q8_0) {
+        return dequantize_1_q8_0_f32;
+    }
+    return nullptr;
+}
+
+// Helper function to get dequantize_1 function for f16
+constexpr __device__ dequantize_1_f16_t get_dequantize_1_f16(ggml_type type_V) {
+    if (type_V == GGML_TYPE_F16) {
+        return dequantize_1_f16_f16;
+    } else if (type_V == GGML_TYPE_Q4_0) {
+        return dequantize_1_q4_0_f16;
+    } else if (type_V == GGML_TYPE_Q4_1) {
+        return dequantize_1_q4_1_f16;
+    } else if (type_V == GGML_TYPE_Q5_0) {
+        return dequantize_1_q5_0_f16;
+    } else if (type_V == GGML_TYPE_Q5_1) {
+        return dequantize_1_q5_1_f16;
+    } else if (type_V == GGML_TYPE_Q8_0) {
+        return dequantize_1_q8_0_f16;
+    }
+    return nullptr;
 }
 
 template <ggml_type type_K, int D, int nthreads>

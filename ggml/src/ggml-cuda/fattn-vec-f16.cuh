@@ -127,7 +127,7 @@ static __global__ void flash_attn_vec_ext_f16(
             const float * Q_f = (const float *) (Q + j*nb01);
 #pragma unroll
             for (int i0 = 0; i0 < D/sizeof(int); i0 += WARP_SIZE) {
-                quantize_q8_1_to_shared<half2>(Q_f + 4*i0, scale, tmp_q_i32, tmp_q_ds);
+                quantize_q8_1_to_shared<half2, WARP_SIZE>(Q_f + 4*i0, scale, tmp_q_i32 + i0, tmp_q_ds + i0/QI8_1);
             }
         }
 
