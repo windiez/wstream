@@ -266,8 +266,10 @@ void process_text(const std::string& input, std::string& output) {
 // Function to select optimal thread count
 int get_optimal_thread_count() {
     int hardware_threads = std::thread::hardware_concurrency();
-    // Reserve some threads for system and other processes
-    return std::max(1, hardware_threads - 2);
+    // For GPU-accelerated inference, use fewer threads to avoid
+    // CPU/GPU contention and memory bandwidth saturation
+    // Optimal: ~1 thread per 2 cores for hybrid CPU/GPU workloads
+    return std::min(6, std::max(1, hardware_threads / 4));
 }
 
 int main(int argc, char* argv[]) {

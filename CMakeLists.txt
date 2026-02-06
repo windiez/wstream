@@ -8,10 +8,12 @@ include(CheckIncludeFileCXX)
 
 set(SOVERSION 1)
 
-# WITH CUDA:
-# cmake .. -DGGML_CUDA=ON -DGGML_CUDA_F16=ON -DGGML_CUDA_GRAPHS=ON -DGGML_NATIVE=ON \
-# -DGGML_LTO=ON -DGGML_BLAS=ON -DGGML_OPENMP=ON -DBUILD_SHARED_LIBS=OFF \
-# -DCMAKE_BUILD_TYPE=Release -GNinja -DGGML_BLAS_VENDOR=OpenBLAS
+# WITH CUDA (Optimized for RTX 4060 Mobile + Real-time Streaming):
+# cmake .. -DGGML_CUDA=ON -DGGML_CUDA_F16=ON -DGGML_CUDA_GRAPHS=ON \
+# -DGGML_CUDA_FORCE_MMQ=ON -DGGML_CUDA_NO_VMM=ON -DGGML_NATIVE=ON \
+# -DGGML_LTO=ON -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DGGML_OPENMP=ON \
+# -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release \
+# -DCMAKE_CUDA_ARCHITECTURES=89 -GNinja
 
 # NO CUDA:
 # cmake .. \
@@ -165,5 +167,34 @@ else()
     add_subdirectory(src)
     add_subdirectory(common)
     add_subdirectory(stream)
+
+    # Generate optimized launch script
+    set(LAUNCH_SCRIPT "${CMAKE_BINARY_DIR}/run_wstream.sh")
+    file(WRITE ${LAUNCH_SCRIPT}
+"#!/bin/bash
+# Auto-generated launch script for wstream
+# Optimized for GPU-accelerated real-time streaming
+
+# Thread control for optimal CPU/GPU balance
+export OMP_NUM_THREADS=6
+export GGML_NUM_THREADS=6
+
+# CUDA optimizations
+export CUDA_LAUNCH_BLOCKING=0  # Async kernel launches (faster)
+
+# Get the directory where this script is located
+SCRIPT_DIR=\"\$( cd \"\$( dirname \"\${BASH_SOURCE[0]}\" )\" && pwd )\"
+
+# Run wstream with all arguments passed through
+exec \"\${SCRIPT_DIR}/bin/wstream\" \"\$@\"
+")
+
+    # Make the script executable
+    file(CHMOD ${LAUNCH_SCRIPT}
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                    GROUP_READ GROUP_EXECUTE
+                    WORLD_READ WORLD_EXECUTE)
+
+    message(STATUS "Generated launch script: ${LAUNCH_SCRIPT}")
 
 endif()
