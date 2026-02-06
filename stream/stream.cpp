@@ -255,6 +255,16 @@ public:
         return !m_connections.empty();
     }
 
+    // Close all active WebSocket connections (for clean shutdown)
+    void close_all() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto ws : m_connections) {
+            try {
+                beast::get_lowest_layer(*ws).cancel();
+            } catch (...) {}
+        }
+    }
+
     // Optimized broadcast with pre-allocated JSON
     void broadcast(const std::string& transcription) {
         if (transcription.empty()) return;
@@ -335,9 +345,8 @@ void do_session(tcp::socket socket, std::shared_ptr<shared_state> state) {
 }
 
 // WebSocket server thread
-void websocket_server(std::shared_ptr<shared_state> state) {
+void websocket_server(std::shared_ptr<shared_state> state, net::io_context& ioc) {
     try {
-        net::io_context ioc;
         tcp::acceptor acceptor{ioc, {tcp::v4(), 8080}};
 
         // Set options for better connection handling
@@ -345,14 +354,17 @@ void websocket_server(std::shared_ptr<shared_state> state) {
 
         std::cout << "WebSocket server is running on port 8080..." << std::endl;
 
-        while (is_running) {
-            tcp::socket socket{ioc};
-            acceptor.accept(socket);
-            if (!is_running) break;
-            std::thread{do_session, std::move(socket), state}.detach();
-        }
+        std::function<void()> do_accept;
+        do_accept = [&] {
+            acceptor.async_accept([&](beast::error_code ec, tcp::socket socket) {
+                if (ec) return; // Acceptor was cancelled or error
+                std::thread{do_session, std::move(socket), state}.detach();
+                do_accept();
+            });
+        };
+        do_accept();
 
-        ioc.stop();
+        ioc.run();
     } catch (std::exception const& e) {
         std::cerr << "WebSocket Server Error: " << e.what() << std::endl;
     }
@@ -492,7 +504,8 @@ int main(int argc, char* argv[]) {
 
     // Start the WebSocket server
     auto state = std::make_shared<shared_state>();
-    std::thread ws_thread(websocket_server, state);
+    net::io_context ws_ioc;
+    std::thread ws_thread(websocket_server, state, std::ref(ws_ioc));
 
     // Start the broadcasting thread
     std::thread bc_thread(broadcast_thread, state, std::ref(transcription_queue));
@@ -623,6 +636,10 @@ int main(int argc, char* argv[]) {
     audio.pause();
     SDL_Quit();
     is_running = false;
+
+    // Stop WebSocket: close active sessions and cancel the acceptor
+    state->close_all();
+    ws_ioc.stop();
 
     // Wait for threads to finish
     if (ws_thread.joinable()) ws_thread.join();
