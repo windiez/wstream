@@ -4,6 +4,7 @@
 #include "common-whisper.h"
 #include "concurrentqueue.h"
 #include <iostream>
+#include <fstream>
 #include <thread>
 #include <atomic>
 #include <string>
@@ -16,12 +17,171 @@
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <condition_variable>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+#include <cstdlib>
 
 namespace fs = std::filesystem;
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
+
+// Transcription logger - persists transcriptions to file asynchronously
+// Uses lock-free queue to avoid blocking the main transcription thread
+class TranscriptionLogger {
+private:
+    fs::path m_log_path;
+    moodycamel::ConcurrentQueue<std::string> m_queue;
+    std::vector<std::string> m_buffer;
+    std::thread m_writer_thread;
+    std::atomic<bool> m_running{false};
+    std::atomic<bool> m_initialized{false};
+    std::condition_variable m_cond;
+    std::mutex m_cond_mutex;
+    std::atomic<bool> m_new_data{false};
+    size_t m_flush_threshold;
+
+    static fs::path get_log_directory() {
+        const char* home = std::getenv("HOME");
+        if (!home) {
+            home = std::getenv("USERPROFILE");
+        }
+        if (!home) {
+            return fs::path{};
+        }
+        return fs::path(home) / ".wstream";
+    }
+
+    static std::string generate_filename() {
+        auto now = std::chrono::system_clock::now();
+        auto time_t_now = std::chrono::system_clock::to_time_t(now);
+        std::tm tm_now{};
+        localtime_r(&time_t_now, &tm_now);
+
+        std::ostringstream oss;
+        oss << std::put_time(&tm_now, "%d%m%Y_%H%M%S") << ".log";
+        return oss.str();
+    }
+
+    void flush_buffer_to_file() {
+        if (m_buffer.empty()) {
+            return;
+        }
+
+        std::ofstream file(m_log_path, std::ios::app);
+        if (!file.is_open()) {
+            std::cerr << "TranscriptionLogger: Failed to open log file" << std::endl;
+            return;
+        }
+
+        for (const auto& entry : m_buffer) {
+            file << entry << '\n';
+        }
+        file.flush();
+        m_buffer.clear();
+    }
+
+    void writer_loop() {
+        std::string transcription;
+        m_buffer.reserve(m_flush_threshold);
+
+        while (m_running.load()) {
+            // Wait for data or shutdown signal
+            {
+                std::unique_lock<std::mutex> lock(m_cond_mutex);
+                m_cond.wait_for(lock, std::chrono::milliseconds(100), [this] {
+                    return m_new_data.load() || !m_running.load();
+                });
+                m_new_data.store(false);
+            }
+
+            // Drain queue into buffer
+            while (m_queue.try_dequeue(transcription)) {
+                m_buffer.push_back(std::move(transcription));
+
+                if (m_buffer.size() >= m_flush_threshold) {
+                    flush_buffer_to_file();
+                }
+            }
+        }
+
+        // Final drain on shutdown
+        while (m_queue.try_dequeue(transcription)) {
+            m_buffer.push_back(std::move(transcription));
+        }
+        flush_buffer_to_file();
+    }
+
+public:
+    explicit TranscriptionLogger(size_t flush_threshold = 10)
+        : m_flush_threshold(flush_threshold) {
+
+        fs::path log_dir = get_log_directory();
+        if (log_dir.empty()) {
+            std::cerr << "TranscriptionLogger: Could not determine home directory" << std::endl;
+            return;
+        }
+
+        std::error_code ec;
+        if (!fs::exists(log_dir)) {
+            if (!fs::create_directories(log_dir, ec)) {
+                std::cerr << "TranscriptionLogger: Failed to create directory "
+                          << log_dir << ": " << ec.message() << std::endl;
+                return;
+            }
+        }
+
+        m_log_path = log_dir / generate_filename();
+        m_initialized.store(true);
+        m_running.store(true);
+        m_writer_thread = std::thread(&TranscriptionLogger::writer_loop, this);
+
+        std::cout << "TranscriptionLogger: Logging to " << m_log_path << std::endl;
+    }
+
+    ~TranscriptionLogger() {
+        stop();
+    }
+
+    TranscriptionLogger(const TranscriptionLogger&) = delete;
+    TranscriptionLogger& operator=(const TranscriptionLogger&) = delete;
+    TranscriptionLogger(TranscriptionLogger&&) = delete;
+    TranscriptionLogger& operator=(TranscriptionLogger&&) = delete;
+
+    // Lock-free, non-blocking log call
+    void log(const std::string& transcription) {
+        if (!m_initialized.load() || transcription.empty()) {
+            return;
+        }
+
+        m_queue.enqueue(transcription);
+        {
+            std::lock_guard<std::mutex> lock(m_cond_mutex);
+            m_new_data.store(true);
+        }
+        m_cond.notify_one();
+    }
+
+    void stop() {
+        if (!m_running.exchange(false)) {
+            return; // Already stopped
+        }
+        m_cond.notify_one();
+        if (m_writer_thread.joinable()) {
+            m_writer_thread.join();
+        }
+    }
+
+    bool is_initialized() const {
+        return m_initialized.load();
+    }
+
+    fs::path get_log_path() const {
+        return m_log_path;
+    }
+};
 
 // Global flags
 std::atomic<bool> is_running(true);
@@ -327,6 +487,9 @@ int main(int argc, char* argv[]) {
     // Set up transcription queue
     TranscriptionQueue transcription_queue;
 
+    // Set up transcription logger (flushes every 10 transcriptions or on exit)
+    TranscriptionLogger transcription_logger(10);
+
     // Start the WebSocket server
     auto state = std::make_shared<shared_state>();
     std::thread ws_thread(websocket_server, state);
@@ -443,6 +606,9 @@ int main(int argc, char* argv[]) {
             if (!processed_text.empty()) {
                 std::cout << processed_text << std::endl;
 
+                // Log transcription to file
+                transcription_logger.log(processed_text);
+
                 // Queue for broadcasting instead of immediate broadcast
                 transcription_queue.push(processed_text);
             }
@@ -453,6 +619,7 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "Shutting down..." << std::endl;
+
     audio.pause();
     SDL_Quit();
     is_running = false;
@@ -460,6 +627,9 @@ int main(int argc, char* argv[]) {
     // Wait for threads to finish
     if (ws_thread.joinable()) ws_thread.join();
     if (bc_thread.joinable()) bc_thread.join();
+
+    // Stop logger thread and flush remaining transcriptions
+    transcription_logger.stop();
 
     whisper_free(ctx);
 
