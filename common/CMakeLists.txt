@@ -1,13 +1,15 @@
-find_package(Threads REQUIRED)
+if (NOT EMSCRIPTEN)
+    find_package(Threads REQUIRED)
+endif()
 
 # third-party
-# SDL2
-find_package(SDL2 REQUIRED)
-
-string(STRIP "${SDL2_LIBRARIES}" SDL2_LIBRARIES)
-
-message(STATUS "SDL2_INCLUDE_DIRS = ${SDL2_INCLUDE_DIRS}")
-message(STATUS "SDL2_LIBRARIES    = ${SDL2_LIBRARIES}")
+# SDL2 — not needed for WASM builds (browser Web Audio API is used instead)
+if (NOT EMSCRIPTEN)
+    find_package(SDL2 REQUIRED)
+    string(STRIP "${SDL2_LIBRARIES}" SDL2_LIBRARIES)
+    message(STATUS "SDL2_INCLUDE_DIRS = ${SDL2_INCLUDE_DIRS}")
+    message(STATUS "SDL2_LIBRARIES    = ${SDL2_LIBRARIES}")
+endif()
 
 # common
 

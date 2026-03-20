@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>hyni - Whisper.cpp Web Demo</title>
+    <style>
+        :root {
+            --primary: #6d28d9;
+            --primary-dark: #5b21b6;
+            --dark: #1e293b;
+            --light: #f8fafc;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --gray: #94a3b8;
+        }
+
+        body {
+            font-family: 'Fira Code', monospace;
+            background-color: #f1f5f9;
+            color: var(--dark);
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 1rem;
+            line-height: 1.4;
+            font-size: 0.85rem;
+        }
+
+        h1 {
+            color: var(--primary);
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            font-size: 1.25rem;
+        }
+
+        h2 {
+            color: var(--dark);
+            font-weight: 600;
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+            font-size: 1rem;
+        }
+
+        #status {
+            padding: 0.5rem;
+            margin: 0.5rem 0;
+            border-radius: 0.25rem;
+            font-weight: 500;
+            font-size: 0.8rem;
+        }
+
+        .loading { background: #fffbeb; color: #b45309; }
+        .ready { background: #ecfdf5; color: #047857; }
+        .error { background: #fee2e2; color: #b91c1c; }
+
+        button {
+            padding: 0.5rem 0.75rem;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin-right: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        button:hover {
+            background: var(--primary-dark);
+        }
+
+        button:disabled {
+            background: var(--gray);
+            cursor: not-allowed;
+        }
+
+        #model-selection {
+            margin-bottom: 1rem;
+        }
+
+        #model-status {
+            margin: 0.5rem 0;
+            font-weight: 500;
+            font-size: 0.8rem;
+        }
+
+        .model-btn {
+            padding: 0.5rem 0.75rem;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            font-size: 0.8rem;
+            margin-right: 0.5rem;
+        }
+
+        #download-progress {
+            margin: 0.5rem 0;
+            font-size: 0.8rem;
+        }
+
+        .progress-bar {
+            height: 0.25rem;
+            background: #e2e8f0;
+            border-radius: 0.125rem;
+            margin-top: 0.25rem;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--primary);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .console-style {
+            background: var(--dark);
+            color: #f8fafc;
+            padding: 0.75rem;
+            border-radius: 0.25rem;
+            margin: 0.5rem 0;
+            font-family: 'Fira Code', monospace;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            font-size: 0.8rem;
+            line-height: 1.4;
+        }
+
+        #transcription-container {
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        #output {
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.3rem;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border-radius: 0.125rem;
+            font-size: 0.7rem;
+            font-weight: 500;
+            margin-left: 0.25rem;
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <h1>hyni <span style="color: var(--gray);">powered by Whisper.cpp</span></h1>
+
+        <div id="status" class="ready">WASM Runtime Ready</div>
+
+        <div id="model-selection">
+            <h2>Select Whisper Model:</h2>
+            <div id="model-status">No model selected</div>
+            <div>
+                <button class="model-btn" id="fetch-whisper-tiny-en" onclick="loadWhisper('tiny.en')">
+                    tiny.en<span class="badge">75 MB</span>
+                </button>
+                <button class="model-btn" id="fetch-whisper-base-en" onclick="loadWhisper('base.en')">
+                    base.en<span class="badge">142 MB</span>
+                </button>
+                <button class="model-btn" id="fetch-whisper-small-en" onclick="loadWhisper('small.en')">
+                    small.en<span class="badge">490 MB</span>
+                </button>
+            </div>
+            <div id="download-progress">
+                <span id="fetch-whisper-progress"></span>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-bar-fill" id="progress-bar-fill"></div>
+            </div>
+        </div>
+
+        <h2>Recording Controls</h2>
+        <div>
+            <button id="start" disabled>Start Recording</button>
+            <button id="stop" disabled>Stop Recording</button>
+            <button id="clear" onclick="clearCache()">Clear Cache</button>
+        </div>
+
+        <div id="transcription-container">
+            <h2>Live Transcription</h2>
+            <div id="state-transcribed" class="console-style">[Your transcribed text will appear here in real-time]</div>
+        </div>
+
+        <div id="output-container">
+            <h2>Console Output</h2>
+            <div id="output" class="console-style"></div>
+        </div>
+    </div>
+
+    <!-- Load WASM module -->
+    <script type="text/javascript" src="helpers.js"></script>
+    <script>
+        // ====================== Simple VAD Implementation ======================
+        class SimpleVAD {
+            constructor({onVoiceStart, onVoiceEnd, threshold = 0.02, debounceTime = 300, minDuration = 1500}) {
+                this.onVoiceStart = onVoiceStart;
+                this.onVoiceEnd = onVoiceEnd;
+                this.threshold = threshold;
+                this.debounceTime = debounceTime;
+                this.minDuration = minDuration; // Minimum duration in ms
+                this.audioContext = null;
+                this.processor = null;
+                this.isSpeaking = false;
+                this.silenceStart = 0;
+                this.audioBuffer = [];
+            }
+
+            async start() {
+                try {
+                    this.audioContext = new AudioContext({sampleRate: kSampleRate});
+                    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+                    const source = this.audioContext.createMediaStreamSource(stream);
+
+                    this.processor = this.audioContext.createScriptProcessor(1024, 1, 1);
+                    this.processor.onaudioprocess = (e) => this.processAudio(e);
+
+                    source.connect(this.processor);
+                    this.processor.connect(this.audioContext.destination);
+                    return true;
+                } catch (err) {
+                    console.error("VAD initialization error:", err);
+                    return false;
+                }
+            }
+
+            processAudio(e) {
+                const input = e.inputBuffer.getChannelData(0);
+                const energy = this.calculateEnergy(input);
+
+                if (energy > this.threshold) {
+                    if (!this.isSpeaking) {
+                        this.isSpeaking = true;
+                        this.onVoiceStart?.();
+                    }
+                    this.silenceStart = 0;
+                    this.audioBuffer.push(...input);
+                } else {
+                    if (this.isSpeaking) {
+                        if (!this.silenceStart) this.silenceStart = Date.now();
+                        if (Date.now() - this.silenceStart > this.debounceTime) {
+                            this.isSpeaking = false;
+
+                            // Check if we have enough audio
+                            const durationMs = (this.audioBuffer.length / (this.audioContext?.sampleRate || 16000)) * 1000;
+                            if (durationMs >= this.minDuration) {
+                                const audioCopy = new Float32Array(this.audioBuffer);
+                                this.onVoiceEnd?.(audioCopy);
+                            }
+                            this.audioBuffer = [];
+                        }
+                    }
+                }
+            }
+
+            calculateEnergy(buffer) {
+                let sum = 0;
+                for (let i = 0; i < buffer.length; i++) {
+                    sum += buffer[i] * buffer[i];
+                }
+                return Math.sqrt(sum / buffer.length);
+            }
+
+            stop() {
+                this.processor?.disconnect();
+                this.audioContext?.close();
+                this.audioBuffer = [];
+            }
+        }
+    </script>
+    <script>
+        // Web audio context
+        var context = null;
+
+        // Audio data
+        var audio = null;
+        var audio0 = null;
+
+        // The stream instance
+        var instance = null;
+
+        // Model name
+        var model_whisper = null;
+
+        var Module = {
+            print: printTextarea,
+            printErr: printTextarea,
+            setStatus: function(text) {
+                printTextarea('js: ' + text);
+            },
+            monitorRunDependencies: function(left) {
+            },
+            preRun: function() {
+                printTextarea('js: Preparing ...');
+            },
+            postRun: function() {
+                printTextarea('js: Initialized successfully!');
+                document.getElementById('status').className = 'ready';
+                document.getElementById('status').textContent = 'WASM Runtime Ready';
+            }
+        };
+
+        // IndexedDB setup for caching
+        let dbVersion = 1
+        let dbName = 'whisper.ggerganov.com';
+        let indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB
+
+        function printTextarea(text) {
+            const outputEl = document.getElementById('output');
+            outputEl.textContent += text + '\n';
+            outputEl.scrollTop = outputEl.scrollHeight;
+            console.log(text);
+        }
+
+        function storeFS(fname, buf) {
+            // Write to WASM file using FS_createDataFile
+            // If the file exists, delete it
+            try {
+                Module.FS_unlink(fname);
+            } catch (e) {
+                // Ignore
+            }
+
+            Module.FS_createDataFile("/", fname, buf, true, true);
+
+            printTextarea('storeFS: stored model: ' + fname + ' size: ' + buf.length);
+
+            document.getElementById('model-status').textContent = 'Loaded "' + model_whisper + '"!';
+            document.getElementById('model-status').className = 'ready';
+
+            if (model_whisper != null) {
+                document.getElementById('start').disabled = false;
+                document.getElementById('stop').disabled = true;
+            }
+
+            // Update progress bar to 100%
+            document.getElementById('progress-bar-fill').style.width = '100%';
+        }
+
+        function loadWhisper(model) {
+            let urls = {
+                'tiny.en': 'https://whisper.ggerganov.com/ggml-model-whisper-tiny.en.bin',
+                'base.en': 'https://whisper.ggerganov.com/ggml-model-whisper-base.en.bin',
+                'small.en': 'https://whisper.ggerganov.com/ggml-model-whisper-small.en.bin',
+            };
+
+            let sizes = {
+                'tiny.en': 75,
+                'base.en': 142,
+                'small.en': 490,
+            };
+
+            let url = urls[model];
+            let dst = 'whisper.bin';
+            let size_mb = sizes[model];
+
+            model_whisper = model;
+
+            document.getElementById('fetch-whisper-tiny-en').style.display = 'none';
+            document.getElementById('fetch-whisper-base-en').style.display = 'none';
+            document.getElementById('fetch-whisper-small-en').style.display = 'none';
+
+            document.getElementById('model-status').textContent = 'Loading "' + model + '" ... ';
+            document.getElementById('model-status').className = 'loading';
+
+            cbProgress = function(p) {
+                let el = document.getElementById('fetch-whisper-progress');
+                el.innerHTML = Math.round(100*p) + '%';
+
+                // Update progress bar
+                document.getElementById('progress-bar-fill').style.width = Math.round(100*p) + '%';
+            };
+
+            cbCancel = function() {
+                var el;
+                el = document.getElementById('fetch-whisper-tiny-en'); if (el) el.style.display = 'inline-block';
+                el = document.getElementById('fetch-whisper-base-en'); if (el) el.style.display = 'inline-block';
+                el = document.getElementById('fetch-whisper-small-en'); if (el) el.style.display = 'inline-block';
+
+                el = document.getElementById('model-status'); if (el) el.textContent = 'Download cancelled';
+                el = document.getElementById('model-status'); if (el) el.className = 'error';
+
+                // Reset progress bar
+                document.getElementById('progress-bar-fill').style.width = '0%';
+            };
+
+            loadRemote(url, dst, size_mb, cbProgress, storeFS, cbCancel, printTextarea);
+        }
+
+        // Microphone handling
+        const kSampleRate = 16000;
+        const kRestartRecording_s = 60;
+        const kIntervalAudio_ms = 5000; // Pass the recorded audio to the C++ instance at this rate
+
+        var mediaRecorder = null;
+        var doRecording = false;
+        var startTime = 0;
+
+        window.AudioContext = window.AudioContext || window.webkitAudioContext;
+        window.OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+
+        let audioBufferQueue = new Float32Array(0);
+        const REQUIRED_SAMPLES = 16000 * 1.5;
+
+        async function startRecording() {
+            Module.set_status("");
+            document.getElementById('status').textContent = "Initializing...";
+
+            const vad = new SimpleVAD({
+                threshold: 0.025,
+                debounceTime: 500,
+                minDuration: 1000, // Require at least 1s of speech
+                onVoiceStart: () => {
+                    document.getElementById('status').textContent = "Speaking...";
+                },
+                onVoiceEnd: (audioData) => {
+                    // Accumulate audio until we have enough
+                    const newBuffer = new Float32Array(audioBufferQueue.length + audioData.length);
+                    newBuffer.set(audioBufferQueue);
+                    newBuffer.set(audioData, audioBufferQueue.length);
+                    audioBufferQueue = newBuffer;
+
+                    // Process when we have enough samples
+                    if (audioBufferQueue.length >= REQUIRED_SAMPLES) {
+                        document.getElementById('status').textContent = "Processing...";
+
+                        if (instance) {
+                            Module.set_audio(instance, audioBufferQueue);
+                            // Keep last 500ms for context
+                            audioBufferQueue = audioBufferQueue.slice(-(16000 * 0.5));
+                        }
+                    }
+                }
+            });
+
+            const success = await vad.start();
+            if (!success) {
+                document.getElementById('status').textContent = "Error initializing microphone";
+                return;
+            }
+
+            doRecording = true;
+            startTime = Date.now();
+            document.getElementById('start').disabled = true;
+            document.getElementById('stop').disabled = false;
+            document.getElementById('status').textContent = "Ready (VAD Active)";
+
+            // Store the VAD instance for stopping
+            window.currentVAD = vad;
+        }
+
+        function stopRecording() {
+            if (audioBufferQueue.length > 16000 && instance) {
+                Module.set_audio(instance, audioBufferQueue);
+            }
+            audioBufferQueue = new Float32Array(0);
+
+            if (window.currentVAD) {
+                window.currentVAD.stop();
+            }
+            doRecording = false;
+            document.getElementById('start').disabled = false;
+            document.getElementById('stop').disabled = true;
+            document.getElementById('status').textContent = "Stopped";
+        }
+
+        // Transcription handling
+        var nLines = 0;
+        var intervalUpdate = null;
+        var transcribedAll = '';
+
+        function onStart() {
+            if (!instance) {
+                instance = Module.init('whisper.bin');
+
+                if (instance) {
+                    printTextarea("js: whisper initialized, instance: " + instance);
+                }
+            }
+
+            if (!instance) {
+                printTextarea("js: failed to initialize whisper");
+                document.getElementById('status').textContent = "Error: Failed to initialize Whisper";
+                document.getElementById('status').className = "error";
+                return;
+            }
+
+            startRecording();
+
+            intervalUpdate = setInterval(function() {
+                var transcribed = Module.get_transcribed();
+                if (transcribed && transcribed.length > 0) {
+                    document.getElementById('state-transcribed').textContent = transcribed;
+                }
+                document.getElementById('status').textContent = Module.get_status();
+            }, 100);
+        }
+
+        function clearCache() {
+            // if (window.indexedDB) {
+            //     indexedDB.deleteDatabase('whisper.ggerganov.com');
+            //     printTextarea("Cache cleared. Please reload the page.");
+            //     document.getElementById('status').textContent = "Cache cleared. Please reload the page.";
+            // } else {
+            //     printTextarea("IndexedDB not supported - cannot clear cache");
+            //     document.getElementById('status').textContent = "Error: IndexedDB not supported";
+            //     document.getElementById('status').className = "error";
+            // }
+            const clearBtn = document.getElementById('clear');
+            clearBtn.textContent = "Clearing...";
+            clearBtn.disabled = true;
+
+            // Execute clear
+            Module.reset_transcription();
+            document.getElementById('state-transcribed').textContent = "[Transcript cleared]";
+
+            // Reset button after delay
+            setTimeout(() => {
+                clearBtn.textContent = "Clear Transcription";
+                clearBtn.disabled = false;
+            }, 500);
+        }
+
+        // Event Listeners
+        document.getElementById('start').addEventListener('click', onStart);
+        document.getElementById('stop').addEventListener('click', stopRecording);
+    </script>
+    <script type="text/javascript" src="libstream.js"></script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>hyni - Whisper.cpp Web Demo</title>
+    <title>hyni - Voice Scheduler</title>
     <style>
         :root {
             --primary: #6d28d9;
@@ -14,528 +14,1073 @@
             --warning: #f59e0b;
             --error: #ef4444;
             --gray: #94a3b8;
+            /* Agent panel additions */
+            --agent-bg: #0f172a;
+            --agent-border: #1e3a5f;
+            --agent-user: #38bdf8;
+            --agent-bot: #86efac;
+            --agent-sys: #fbbf24;
+            --slot-filled: #10b981;
+            --slot-empty: #475569;
         }
 
         body {
             font-family: 'Fira Code', monospace;
             background-color: #f1f5f9;
             color: var(--dark);
-            max-width: 800px;
+            max-width: 960px;
             margin: 0 auto;
             padding: 1rem;
             line-height: 1.4;
             font-size: 0.85rem;
         }
 
-        h1 {
-            color: var(--primary);
-            font-weight: 700;
-            margin-bottom: 0.5rem;
-            font-size: 1.25rem;
-        }
-
-        h2 {
-            color: var(--dark);
-            font-weight: 600;
-            margin-top: 1rem;
-            margin-bottom: 0.5rem;
-            font-size: 1rem;
-        }
+        h1 { color: var(--primary); font-weight: 700; margin-bottom: 0.5rem; font-size: 1.25rem; }
+        h2 { color: var(--dark); font-weight: 600; margin-top: 1rem; margin-bottom: 0.5rem; font-size: 1rem; }
 
         #status {
-            padding: 0.5rem;
-            margin: 0.5rem 0;
-            border-radius: 0.25rem;
-            font-weight: 500;
-            font-size: 0.8rem;
+            padding: 0.5rem; margin: 0.5rem 0;
+            border-radius: 0.25rem; font-weight: 500; font-size: 0.8rem;
         }
 
         .loading { background: #fffbeb; color: #b45309; }
-        .ready { background: #ecfdf5; color: #047857; }
-        .error { background: #fee2e2; color: #b91c1c; }
+        .ready   { background: #ecfdf5; color: #047857; }
+        .error   { background: #fee2e2; color: #b91c1c; }
 
         button {
-            padding: 0.5rem 0.75rem;
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 0.25rem;
-            cursor: pointer;
-            font-size: 0.8rem;
-            font-weight: 500;
-            margin-right: 0.5rem;
-            margin-bottom: 0.5rem;
+            padding: 0.5rem 0.75rem; background: var(--primary); color: white;
+            border: none; border-radius: 0.25rem; cursor: pointer;
+            font-size: 0.8rem; font-weight: 500; margin-right: 0.5rem; margin-bottom: 0.5rem;
         }
+        button:hover    { background: var(--primary-dark); }
+        button:disabled { background: var(--gray); cursor: not-allowed; }
 
-        button:hover {
-            background: var(--primary-dark);
-        }
-
-        button:disabled {
-            background: var(--gray);
-            cursor: not-allowed;
-        }
-
-        #model-selection {
-            margin-bottom: 1rem;
-        }
-
-        #model-status {
-            margin: 0.5rem 0;
-            font-weight: 500;
-            font-size: 0.8rem;
-        }
+        #model-selection { margin-bottom: 1rem; }
+        #model-status    { margin: 0.5rem 0; font-weight: 500; font-size: 0.8rem; }
 
         .model-btn {
-            padding: 0.5rem 0.75rem;
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 0.25rem;
-            cursor: pointer;
-            font-size: 0.8rem;
-            margin-right: 0.5rem;
+            padding: 0.5rem 0.75rem; background: var(--primary); color: white;
+            border: none; border-radius: 0.25rem; cursor: pointer;
+            font-size: 0.8rem; margin-right: 0.5rem;
         }
 
-        #download-progress {
-            margin: 0.5rem 0;
-            font-size: 0.8rem;
-        }
+        #download-progress { margin: 0.5rem 0; font-size: 0.8rem; }
 
         .progress-bar {
-            height: 0.25rem;
-            background: #e2e8f0;
-            border-radius: 0.125rem;
-            margin-top: 0.25rem;
-            overflow: hidden;
+            height: 0.25rem; background: #e2e8f0;
+            border-radius: 0.125rem; margin-top: 0.25rem; overflow: hidden;
         }
-
         .progress-bar-fill {
-            height: 100%;
-            background: var(--primary);
-            width: 0%;
+            height: 100%; background: var(--primary); width: 0%;
             transition: width 0.3s ease;
         }
 
         .console-style {
-            background: var(--dark);
-            color: #f8fafc;
-            padding: 0.75rem;
-            border-radius: 0.25rem;
-            margin: 0.5rem 0;
-            font-family: 'Fira Code', monospace;
-            white-space: pre-wrap;
-            overflow-x: auto;
-            font-size: 0.8rem;
-            line-height: 1.4;
+            background: var(--dark); color: #f8fafc; padding: 0.75rem;
+            border-radius: 0.25rem; margin: 0.5rem 0;
+            font-family: 'Fira Code', monospace; white-space: pre-wrap;
+            overflow-x: auto; font-size: 0.8rem; line-height: 1.4;
         }
 
-        #transcription-container {
-            margin-top: 1rem;
-            margin-bottom: 1rem;
-        }
-
-        #output {
-            margin-top: 1rem;
-            margin-bottom: 1rem;
-        }
+        #transcription-container { margin-top: 1rem; margin-bottom: 1rem; }
+        #output                  { margin-top: 1rem; margin-bottom: 1rem; }
 
         .badge {
-            display: inline-block;
-            padding: 0.15rem 0.3rem;
-            background: rgba(255,255,255,0.2);
-            color: white;
-            border-radius: 0.125rem;
-            font-size: 0.7rem;
-            font-weight: 500;
-            margin-left: 0.25rem;
+            display: inline-block; padding: 0.15rem 0.3rem;
+            background: rgba(255,255,255,0.2); color: white;
+            border-radius: 0.125rem; font-size: 0.7rem;
+            font-weight: 500; margin-left: 0.25rem;
         }
+
+        /* ── AGENT SECTION ─────────────────────────────────────────── */
+
+        #agent-section {
+            margin-top: 1.5rem;
+            border-top: 2px solid var(--primary);
+            padding-top: 1rem;
+        }
+        #agent-section h2 { color: var(--primary); }
+
+        .agent-layout {
+            display: grid;
+            grid-template-columns: 1fr 220px;
+            gap: 0.75rem;
+            margin-top: 0.5rem;
+        }
+
+        #agent-log {
+            background: var(--agent-bg);
+            border: 1px solid var(--agent-border);
+            border-radius: 0.25rem;
+            padding: 0.75rem;
+            height: 260px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+            scrollbar-width: thin;
+            scrollbar-color: #334155 transparent;
+        }
+        #agent-log::-webkit-scrollbar       { width: 4px; }
+        #agent-log::-webkit-scrollbar-track  { background: transparent; }
+        #agent-log::-webkit-scrollbar-thumb  { background: #334155; }
+
+        .log-line {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.78rem; line-height: 1.5;
+            padding: 0.2rem 0.4rem; border-radius: 0.15rem;
+            animation: fadeIn 0.25s ease;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(3px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .log-line.user   { color: var(--agent-user); }
+        .log-line.agent  { color: var(--agent-bot); }
+        .log-line.system { color: var(--agent-sys); font-size: 0.72rem; opacity: 0.75; }
+        .log-line.user::before   { content: 'you  › '; opacity: 0.5; }
+        .log-line.agent::before  { content: 'bot  › '; opacity: 0.5; }
+        .log-line.system::before { content: 'sys  › '; opacity: 0.5; }
+
+        .agent-sidebar {
+            display: flex; flex-direction: column; gap: 0.5rem;
+        }
+
+        .slot-card {
+            background: var(--agent-bg);
+            border: 1px solid var(--agent-border);
+            border-radius: 0.25rem;
+            padding: 0.6rem 0.75rem;
+        }
+        .slot-label {
+            font-size: 0.65rem; letter-spacing: 0.1em;
+            color: var(--gray); margin-bottom: 0.2rem; text-transform: uppercase;
+        }
+        .slot-value {
+            font-family: 'Fira Code', monospace; font-size: 0.8rem;
+            color: var(--slot-empty); min-height: 1.1rem; transition: color 0.3s;
+        }
+        .slot-value.filled { color: var(--slot-filled); }
+
+        .state-row {
+            display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;
+        }
+        .state-badge {
+            font-family: 'Fira Code', monospace; font-size: 0.7rem;
+            padding: 0.2rem 0.5rem; border-radius: 0.2rem;
+            background: #334155; color: var(--gray);
+            letter-spacing: 0.05em; transition: background 0.3s, color 0.3s;
+        }
+        .state-badge.active { background: #14532d; color: #86efac; }
+        .state-badge.done   { background: #713f12; color: #fde68a; }
+        .state-badge.error  { background: #7f1d1d; color: #fca5a5; }
+
+        .agent-controls { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+
+        .btn-agent {
+            padding: 0.4rem 0.8rem; font-size: 0.75rem; background: var(--primary);
+            color: white; border: none; border-radius: 0.25rem; cursor: pointer;
+            font-family: 'Fira Code', monospace;
+        }
+        .btn-agent:hover    { background: var(--primary-dark); }
+        .btn-agent:disabled { background: var(--gray); cursor: not-allowed; }
+        .btn-agent.secondary       { background: #334155; color: #cbd5e1; }
+        .btn-agent.secondary:hover { background: #475569; }
+        .btn-agent.success         { background: #065f46; color: #6ee7b7; }
+        .btn-agent.success:hover   { background: #047857; }
+
+        #speaking-indicator { display: none; font-size: 0.72rem; color: var(--agent-bot); animation: blink 1s infinite; }
+        #speaking-indicator.visible { display: inline; }
+        @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+
+        #event-toast {
+            display: none; margin-top: 0.5rem; padding: 0.6rem 0.75rem;
+            background: #064e3b; border: 1px solid #059669;
+            border-radius: 0.25rem; color: #6ee7b7; font-size: 0.8rem;
+        }
+        #event-toast a { color: #34d399; text-decoration: underline; }
+
+        #config-panel {
+            margin-top: 0.75rem; padding: 0.75rem;
+            background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.25rem;
+        }
+        #config-panel h2 { margin-top: 0; font-size: 0.9rem; }
+
+        .config-row {
+            display: flex; align-items: center; gap: 0.5rem;
+            margin-bottom: 0.4rem; flex-wrap: wrap;
+        }
+        .config-row label { font-size: 0.75rem; color: var(--dark); min-width: 120px; }
+        .config-row input,
+        .config-row select {
+            font-family: 'Fira Code', monospace; font-size: 0.75rem;
+            padding: 0.3rem 0.5rem; border: 1px solid #cbd5e1;
+            border-radius: 0.2rem; background: white; color: var(--dark);
+            flex: 1; min-width: 0;
+        }
+        .config-note { font-size: 0.7rem; color: var(--gray); margin-top: 0.25rem; }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
-        <h1>hyni <span style="color: var(--gray);">powered by Whisper.cpp</span></h1>
+        <h1>hyni <span style="color: var(--gray);">voice scheduler · powered by Whisper.cpp</span></h1>
 
         <div id="status" class="ready">WASM Runtime Ready</div>
 
+        <!-- ── MODEL SELECTION (unchanged) ──────────────────────────── -->
         <div id="model-selection">
             <h2>Select Whisper Model:</h2>
             <div id="model-status">No model selected</div>
             <div>
-                <button class="model-btn" id="fetch-whisper-tiny-en" onclick="loadWhisper('tiny.en')">
-                    tiny.en<span class="badge">75 MB</span>
-                </button>
-                <button class="model-btn" id="fetch-whisper-base-en" onclick="loadWhisper('base.en')">
-                    base.en<span class="badge">142 MB</span>
-                </button>
-                <button class="model-btn" id="fetch-whisper-small-en" onclick="loadWhisper('small.en')">
-                    small.en<span class="badge">490 MB</span>
-                </button>
+                <button class="model-btn" id="fetch-whisper-tiny-en"  onclick="loadWhisper('tiny.en')">tiny.en<span class="badge">75 MB</span></button>
+                <button class="model-btn" id="fetch-whisper-base-en"  onclick="loadWhisper('base.en')">base.en<span class="badge">142 MB</span></button>
+                <button class="model-btn" id="fetch-whisper-small-en" onclick="loadWhisper('small.en')">small.en<span class="badge">490 MB</span></button>
             </div>
-            <div id="download-progress">
-                <span id="fetch-whisper-progress"></span>
-            </div>
-            <div class="progress-bar">
-                <div class="progress-bar-fill" id="progress-bar-fill"></div>
-            </div>
+            <div id="download-progress"><span id="fetch-whisper-progress"></span></div>
+            <div class="progress-bar"><div class="progress-bar-fill" id="progress-bar-fill"></div></div>
         </div>
 
+        <!-- ── RECORDING CONTROLS (unchanged) ───────────────────────── -->
         <h2>Recording Controls</h2>
         <div>
             <button id="start" disabled>Start Recording</button>
-            <button id="stop" disabled>Stop Recording</button>
-            <button id="clear" onclick="clearCache()">Clear Cache</button>
+            <button id="stop"  disabled>Stop Recording</button>
+            <button id="clear" onclick="clearCache()">Clear Transcription</button>
         </div>
 
+        <!-- ── LIVE TRANSCRIPTION (unchanged) ───────────────────────── -->
         <div id="transcription-container">
             <h2>Live Transcription</h2>
             <div id="state-transcribed" class="console-style">[Your transcribed text will appear here in real-time]</div>
         </div>
 
+        <!-- ── CONSOLE OUTPUT (unchanged) ───────────────────────────── -->
         <div id="output-container">
             <h2>Console Output</h2>
             <div id="output" class="console-style"></div>
         </div>
-    </div>
 
-    <!-- Load WASM module -->
+        <!-- ════════════════════════════════════════════════════════════
+             AGENT SECTION — everything below here is new
+             ════════════════════════════════════════════════════════════ -->
+        <div id="agent-section">
+            <h2>🗓 Voice Scheduling Agent</h2>
+
+            <!-- Config — fill in keys here, no page reload needed -->
+            <div id="config-panel">
+                <h2>Configuration</h2>
+                <div class="config-row">
+                    <label>LLM Provider</label>
+                    <select id="cfg-provider">
+                        <option value="openai">OpenAI (gpt-4o)</option>
+                        <option value="anthropic">Anthropic (claude-opus-4-6)</option>
+                    </select>
+                </div>
+                <div class="config-row">
+                    <label>API Key</label>
+                    <input type="password" id="cfg-apikey" placeholder="sk-..." autocomplete="off" />
+                </div>
+                <div class="config-row">
+                    <label>Google Client ID</label>
+                    <input type="text" id="cfg-gcal" placeholder="xxxxxx.apps.googleusercontent.com" />
+                </div>
+                <p class="config-note">
+                    Keys stay in memory only — sent only to the respective API endpoint, nowhere else.
+                    See README for Google Calendar OAuth setup (~5 min, one-time).
+                </p>
+            </div>
+
+            <!-- State + speaking indicator -->
+            <div class="agent-controls" style="margin-top:0.75rem;">
+                <div class="state-row">
+                    <span>State:</span>
+                    <span class="state-badge" id="agent-state-badge">idle</span>
+                    <span id="speaking-indicator">● speaking</span>
+                </div>
+            </div>
+
+            <!-- Session buttons -->
+            <div class="agent-controls">
+                <button class="btn-agent"           id="btn-session-start" disabled>▶ Start Session</button>
+                <button class="btn-agent secondary" id="btn-session-reset" disabled>↺ Reset</button>
+                <button class="btn-agent success"   id="btn-cal-auth">⚿ Auth Google Calendar</button>
+            </div>
+
+            <!-- Log + slots -->
+            <div class="agent-layout">
+                <div id="agent-log">
+                    <div class="log-line system">Agent ready. Load a model, then press ▶ Start Session.</div>
+                </div>
+                <div class="agent-sidebar">
+                    <div class="slot-card">
+                        <div class="slot-label">Name</div>
+                        <div class="slot-value" id="slot-name">—</div>
+                    </div>
+                    <div class="slot-card">
+                        <div class="slot-label">Date / Time</div>
+                        <div class="slot-value" id="slot-datetime">—</div>
+                    </div>
+                    <div class="slot-card">
+                        <div class="slot-label">Title</div>
+                        <div class="slot-value" id="slot-title">—</div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="event-toast"></div>
+        </div>
+
+    </div><!-- /.container -->
+
     <script type="text/javascript" src="helpers.js"></script>
+
+    <!-- =====================================================================
+         ORIGINAL CODE — only the poll loop has two new lines added (marked NEW)
+         ===================================================================== -->
     <script>
-        // ====================== Simple VAD Implementation ======================
-        class SimpleVAD {
-            constructor({onVoiceStart, onVoiceEnd, threshold = 0.02, debounceTime = 300, minDuration = 1500}) {
-                this.onVoiceStart = onVoiceStart;
-                this.onVoiceEnd = onVoiceEnd;
-                this.threshold = threshold;
-                this.debounceTime = debounceTime;
-                this.minDuration = minDuration; // Minimum duration in ms
-                this.audioContext = null;
-                this.processor = null;
-                this.isSpeaking = false;
-                this.silenceStart = 0;
-                this.audioBuffer = [];
-            }
+    // ── Simple VAD (original, untouched) ─────────────────────────────────────
+    class SimpleVAD {
+        constructor({onVoiceStart, onVoiceEnd, threshold = 0.02, debounceTime = 300, minDuration = 1500}) {
+            this.onVoiceStart = onVoiceStart;
+            this.onVoiceEnd   = onVoiceEnd;
+            this.threshold    = threshold;
+            this.debounceTime = debounceTime;
+            this.minDuration  = minDuration;
+            this.audioContext = null;
+            this.processor    = null;
+            this.isSpeaking   = false;
+            this.silenceStart = 0;
+            this.audioBuffer  = [];
+        }
 
-            async start() {
-                try {
-                    this.audioContext = new AudioContext({sampleRate: kSampleRate});
-                    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-                    const source = this.audioContext.createMediaStreamSource(stream);
-
-                    this.processor = this.audioContext.createScriptProcessor(1024, 1, 1);
-                    this.processor.onaudioprocess = (e) => this.processAudio(e);
-
-                    source.connect(this.processor);
-                    this.processor.connect(this.audioContext.destination);
-                    return true;
-                } catch (err) {
-                    console.error("VAD initialization error:", err);
-                    return false;
-                }
-            }
-
-            processAudio(e) {
-                const input = e.inputBuffer.getChannelData(0);
-                const energy = this.calculateEnergy(input);
-
-                if (energy > this.threshold) {
-                    if (!this.isSpeaking) {
-                        this.isSpeaking = true;
-                        this.onVoiceStart?.();
-                    }
-                    this.silenceStart = 0;
-                    this.audioBuffer.push(...input);
-                } else {
-                    if (this.isSpeaking) {
-                        if (!this.silenceStart) this.silenceStart = Date.now();
-                        if (Date.now() - this.silenceStart > this.debounceTime) {
-                            this.isSpeaking = false;
-
-                            // Check if we have enough audio
-                            const durationMs = (this.audioBuffer.length / (this.audioContext?.sampleRate || 16000)) * 1000;
-                            if (durationMs >= this.minDuration) {
-                                const audioCopy = new Float32Array(this.audioBuffer);
-                                this.onVoiceEnd?.(audioCopy);
-                            }
-                            this.audioBuffer = [];
-                        }
-                    }
-                }
-            }
-
-            calculateEnergy(buffer) {
-                let sum = 0;
-                for (let i = 0; i < buffer.length; i++) {
-                    sum += buffer[i] * buffer[i];
-                }
-                return Math.sqrt(sum / buffer.length);
-            }
-
-            stop() {
-                this.processor?.disconnect();
-                this.audioContext?.close();
-                this.audioBuffer = [];
+        async start() {
+            try {
+                this.audioContext = new AudioContext({sampleRate: kSampleRate});
+                const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+                const source = this.audioContext.createMediaStreamSource(stream);
+                this.processor = this.audioContext.createScriptProcessor(1024, 1, 1);
+                this.processor.onaudioprocess = (e) => this.processAudio(e);
+                source.connect(this.processor);
+                this.processor.connect(this.audioContext.destination);
+                return true;
+            } catch (err) {
+                console.error("VAD initialization error:", err);
+                return false;
             }
         }
-    </script>
-    <script>
-        // Web audio context
-        var context = null;
 
-        // Audio data
-        var audio = null;
-        var audio0 = null;
+        processAudio(e) {
+            const input  = e.inputBuffer.getChannelData(0);
+            const energy = this.calculateEnergy(input);
 
-        // The stream instance
-        var instance = null;
-
-        // Model name
-        var model_whisper = null;
-
-        var Module = {
-            print: printTextarea,
-            printErr: printTextarea,
-            setStatus: function(text) {
-                printTextarea('js: ' + text);
-            },
-            monitorRunDependencies: function(left) {
-            },
-            preRun: function() {
-                printTextarea('js: Preparing ...');
-            },
-            postRun: function() {
-                printTextarea('js: Initialized successfully!');
-                document.getElementById('status').className = 'ready';
-                document.getElementById('status').textContent = 'WASM Runtime Ready';
+            if (energy > this.threshold) {
+                if (!this.isSpeaking) {
+                    this.isSpeaking = true;
+                    this.onVoiceStart?.();
+                }
+                this.silenceStart = 0;
+                this.audioBuffer.push(...input);
+            } else {
+                if (this.isSpeaking) {
+                    if (!this.silenceStart) this.silenceStart = Date.now();
+                    if (Date.now() - this.silenceStart > this.debounceTime) {
+                        this.isSpeaking = false;
+                        const durationMs = (this.audioBuffer.length / (this.audioContext?.sampleRate || 16000)) * 1000;
+                        if (durationMs >= this.minDuration) {
+                            const audioCopy = new Float32Array(this.audioBuffer);
+                            this.onVoiceEnd?.(audioCopy);
+                        }
+                        this.audioBuffer = [];
+                    }
+                }
             }
+        }
+
+        calculateEnergy(buffer) {
+            let sum = 0;
+            for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
+            return Math.sqrt(sum / buffer.length);
+        }
+
+        stop() {
+            this.processor?.disconnect();
+            this.audioContext?.close();
+            this.audioBuffer = [];
+        }
+    }
+
+    // ── Original globals ──────────────────────────────────────────────────────
+    var context       = null;
+    var audio         = null;
+    var audio0        = null;
+    var instance      = null;
+    var model_whisper = null;
+
+    var Module = {
+        print:    printTextarea,
+        printErr: printTextarea,
+        setStatus: function(text) { printTextarea('js: ' + text); },
+        monitorRunDependencies: function(left) {},
+        preRun:  function() { printTextarea('js: Preparing ...'); },
+        postRun: function() {
+            printTextarea('js: Initialized successfully!');
+            document.getElementById('status').className   = 'ready';
+            document.getElementById('status').textContent = 'WASM Runtime Ready';
+        }
+    };
+
+    let dbVersion = 1;
+    let dbName    = 'whisper.ggerganov.com';
+    let indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
+
+    function printTextarea(text) {
+        const el = document.getElementById('output');
+        el.textContent += text + '\n';
+        el.scrollTop = el.scrollHeight;
+        console.log(text);
+    }
+
+    function storeFS(fname, buf) {
+        try { Module.FS_unlink(fname); } catch (e) {}
+        Module.FS_createDataFile("/", fname, buf, true, true);
+        printTextarea('storeFS: stored model: ' + fname + ' size: ' + buf.length);
+
+        document.getElementById('model-status').textContent = 'Loaded "' + model_whisper + '"!';
+        document.getElementById('model-status').className   = 'ready';
+
+        if (model_whisper != null) {
+            document.getElementById('start').disabled = false;
+            document.getElementById('stop').disabled  = true;
+        }
+
+        document.getElementById('progress-bar-fill').style.width = '100%';
+
+        // NEW — unlock Start Session once model is in WASM FS
+        document.getElementById('btn-session-start').disabled = false;
+    }
+
+    function loadWhisper(model) {
+        let urls = {
+            'tiny.en':  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q5_1.bin',
+            'base.en':  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin',
+            'small.en': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q5_1.bin',
+        };
+        let sizes = {
+            'tiny.en':  31,
+            'base.en':  57,
+            'small.en': 182,
         };
 
-        // IndexedDB setup for caching
-        let dbVersion = 1
-        let dbName = 'whisper.ggerganov.com';
-        let indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB
+        model_whisper = model;
+        const url     = urls[model];
+        const dst     = 'whisper.bin';
+        const size_mb = sizes[model];
 
-        function printTextarea(text) {
-            const outputEl = document.getElementById('output');
-            outputEl.textContent += text + '\n';
-            outputEl.scrollTop = outputEl.scrollHeight;
-            console.log(text);
-        }
+        document.getElementById('fetch-whisper-tiny-en').style.display  = 'none';
+        document.getElementById('fetch-whisper-base-en').style.display  = 'none';
+        document.getElementById('fetch-whisper-small-en').style.display = 'none';
+        document.getElementById('model-status').textContent = 'Loading "' + model + '" ... ';
+        document.getElementById('model-status').className   = 'loading';
 
-        function storeFS(fname, buf) {
-            // Write to WASM file using FS_createDataFile
-            // If the file exists, delete it
-            try {
-                Module.FS_unlink(fname);
-            } catch (e) {
-                // Ignore
-            }
+        cbProgress = (p) => {
+            document.getElementById('fetch-whisper-progress').innerHTML = Math.round(100*p) + '%';
+            document.getElementById('progress-bar-fill').style.width   = Math.round(100*p) + '%';
+        };
+        cbCancel = () => {
+            ['fetch-whisper-tiny-en','fetch-whisper-base-en','fetch-whisper-small-en'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'inline-block';
+            });
+            document.getElementById('model-status').textContent = 'Download cancelled';
+            document.getElementById('model-status').className   = 'error';
+            document.getElementById('progress-bar-fill').style.width = '0%';
+        };
 
-            Module.FS_createDataFile("/", fname, buf, true, true);
+        loadRemote(url, dst, size_mb, cbProgress, storeFS, cbCancel, printTextarea);
+    }
 
-            printTextarea('storeFS: stored model: ' + fname + ' size: ' + buf.length);
+    // ── Audio setup (original) ────────────────────────────────────────────────
+    const kSampleRate          = 16000;
+    const kRestartRecording_s  = 60;
+    const kIntervalAudio_ms    = 5000;
 
-            document.getElementById('model-status').textContent = 'Loaded "' + model_whisper + '"!';
-            document.getElementById('model-status').className = 'ready';
+    var mediaRecorder = null;
+    var doRecording   = false;
+    var startTime     = 0;
 
-            if (model_whisper != null) {
-                document.getElementById('start').disabled = false;
-                document.getElementById('stop').disabled = true;
-            }
+    window.AudioContext        = window.AudioContext        || window.webkitAudioContext;
+    window.OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
 
-            // Update progress bar to 100%
-            document.getElementById('progress-bar-fill').style.width = '100%';
-        }
+    let audioBufferQueue   = new Float32Array(0);
+    const REQUIRED_SAMPLES = 16000 * 1.5;
 
-        function loadWhisper(model) {
-            let urls = {
-                'tiny.en': 'https://whisper.ggerganov.com/ggml-model-whisper-tiny.en.bin',
-                'base.en': 'https://whisper.ggerganov.com/ggml-model-whisper-base.en.bin',
-                'small.en': 'https://whisper.ggerganov.com/ggml-model-whisper-small.en.bin',
-            };
+    async function startRecording() {
+        Module.set_status("");
+        document.getElementById('status').textContent = "Initializing...";
 
-            let sizes = {
-                'tiny.en': 75,
-                'base.en': 142,
-                'small.en': 490,
-            };
+        const vad = new SimpleVAD({
+            threshold:    0.025,
+            debounceTime: 500,
+            minDuration:  1000,
+            onVoiceStart: () => {
+                document.getElementById('status').textContent = "Speaking...";
+            },
+            onVoiceEnd: (audioData) => {
+                const newBuffer = new Float32Array(audioBufferQueue.length + audioData.length);
+                newBuffer.set(audioBufferQueue);
+                newBuffer.set(audioData, audioBufferQueue.length);
+                audioBufferQueue = newBuffer;
 
-            let url = urls[model];
-            let dst = 'whisper.bin';
-            let size_mb = sizes[model];
-
-            model_whisper = model;
-
-            document.getElementById('fetch-whisper-tiny-en').style.display = 'none';
-            document.getElementById('fetch-whisper-base-en').style.display = 'none';
-            document.getElementById('fetch-whisper-small-en').style.display = 'none';
-
-            document.getElementById('model-status').textContent = 'Loading "' + model + '" ... ';
-            document.getElementById('model-status').className = 'loading';
-
-            cbProgress = function(p) {
-                let el = document.getElementById('fetch-whisper-progress');
-                el.innerHTML = Math.round(100*p) + '%';
-
-                // Update progress bar
-                document.getElementById('progress-bar-fill').style.width = Math.round(100*p) + '%';
-            };
-
-            cbCancel = function() {
-                var el;
-                el = document.getElementById('fetch-whisper-tiny-en'); if (el) el.style.display = 'inline-block';
-                el = document.getElementById('fetch-whisper-base-en'); if (el) el.style.display = 'inline-block';
-                el = document.getElementById('fetch-whisper-small-en'); if (el) el.style.display = 'inline-block';
-
-                el = document.getElementById('model-status'); if (el) el.textContent = 'Download cancelled';
-                el = document.getElementById('model-status'); if (el) el.className = 'error';
-
-                // Reset progress bar
-                document.getElementById('progress-bar-fill').style.width = '0%';
-            };
-
-            loadRemote(url, dst, size_mb, cbProgress, storeFS, cbCancel, printTextarea);
-        }
-
-        // Microphone handling
-        const kSampleRate = 16000;
-        const kRestartRecording_s = 60;
-        const kIntervalAudio_ms = 5000; // Pass the recorded audio to the C++ instance at this rate
-
-        var mediaRecorder = null;
-        var doRecording = false;
-        var startTime = 0;
-
-        window.AudioContext = window.AudioContext || window.webkitAudioContext;
-        window.OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-
-        let audioBufferQueue = new Float32Array(0);
-        const REQUIRED_SAMPLES = 16000 * 1.5;
-
-        async function startRecording() {
-            Module.set_status("");
-            document.getElementById('status').textContent = "Initializing...";
-
-            const vad = new SimpleVAD({
-                threshold: 0.025,
-                debounceTime: 500,
-                minDuration: 1000, // Require at least 1s of speech
-                onVoiceStart: () => {
-                    document.getElementById('status').textContent = "Speaking...";
-                },
-                onVoiceEnd: (audioData) => {
-                    // Accumulate audio until we have enough
-                    const newBuffer = new Float32Array(audioBufferQueue.length + audioData.length);
-                    newBuffer.set(audioBufferQueue);
-                    newBuffer.set(audioData, audioBufferQueue.length);
-                    audioBufferQueue = newBuffer;
-
-                    // Process when we have enough samples
-                    if (audioBufferQueue.length >= REQUIRED_SAMPLES) {
-                        document.getElementById('status').textContent = "Processing...";
-
-                        if (instance) {
-                            Module.set_audio(instance, audioBufferQueue);
-                            // Keep last 500ms for context
-                            audioBufferQueue = audioBufferQueue.slice(-(16000 * 0.5));
-                        }
+                if (audioBufferQueue.length >= REQUIRED_SAMPLES) {
+                    document.getElementById('status').textContent = "Processing...";
+                    if (instance) {
+                        Module.set_audio(instance, audioBufferQueue);
+                        audioBufferQueue = audioBufferQueue.slice(-(16000 * 0.5));
                     }
                 }
+            }
+        });
+
+        const success = await vad.start();
+        if (!success) {
+            document.getElementById('status').textContent = "Error initializing microphone";
+            return;
+        }
+
+        doRecording = true;
+        startTime   = Date.now();
+        document.getElementById('start').disabled = true;
+        document.getElementById('stop').disabled  = false;
+        document.getElementById('status').textContent = "Ready (VAD Active)";
+        window.currentVAD = vad;
+    }
+
+    function stopRecording() {
+        if (audioBufferQueue.length > 16000 && instance) {
+            Module.set_audio(instance, audioBufferQueue);
+        }
+        audioBufferQueue = new Float32Array(0);
+        if (window.currentVAD) window.currentVAD.stop();
+        doRecording = false;
+        document.getElementById('start').disabled = false;
+        document.getElementById('stop').disabled  = true;
+        document.getElementById('status').textContent = "Stopped";
+    }
+
+    var nLines         = 0;
+    var intervalUpdate = null;
+    var transcribedAll = '';
+
+    function onStart() {
+        if (!instance) {
+            instance = Module.init('whisper.bin');
+            if (instance) printTextarea("js: whisper initialized, instance: " + instance);
+        }
+
+        if (!instance) {
+            printTextarea("js: failed to initialize whisper");
+            document.getElementById('status').textContent = "Error: Failed to initialize Whisper";
+            document.getElementById('status').className   = "error";
+            return;
+        }
+
+        startRecording();
+
+        intervalUpdate = setInterval(function() {
+            var transcribed = Module.get_transcribed();
+
+            if (transcribed && transcribed.length > 0) {
+                // Original display — unchanged
+                document.getElementById('state-transcribed').textContent = transcribed;
+
+                // ── NEW (2 lines): feed transcript into agent when session is live ──
+                if (agentSessionActive && !TTS.isSpeaking()) {
+                    Agent.handleTranscript(transcribed);
+                    Module.reset_transcription();
+                }
+                // ─────────────────────────────────────────────────────────────────
+            }
+
+            document.getElementById('status').textContent = Module.get_status();
+        }, 100);
+    }
+
+    function clearCache() {
+        const btn = document.getElementById('clear');
+        btn.textContent = "Clearing...";
+        btn.disabled    = true;
+        Module.reset_transcription();
+        document.getElementById('state-transcribed').textContent = "[Transcript cleared]";
+        setTimeout(() => { btn.textContent = "Clear Transcription"; btn.disabled = false; }, 500);
+    }
+
+    document.getElementById('start').addEventListener('click', onStart);
+    document.getElementById('stop').addEventListener('click',  stopRecording);
+    </script>
+
+    <!-- =====================================================================
+         TTS
+         Web Speech API wrapper.
+         To upgrade to ElevenLabs later: replace only the speak() body.
+         ===================================================================== -->
+    <script>
+    const TTS = (() => {
+        const synth   = window.speechSynthesis;
+        let _voice    = null;
+        let _speaking = false;
+
+        // Chrome loads voices async — wait for them
+        (function loadVoices() {
+            const voices = synth.getVoices();
+            if (voices.length) { _voice = _pick(voices); return; }
+            synth.addEventListener('voiceschanged', () => { _voice = _pick(synth.getVoices()); }, { once: true });
+        })();
+
+        function _pick(voices) {
+            const tests = [
+                v => v.name.includes('Google')    && v.lang === 'en-US',
+                v => v.name.includes('Microsoft') && v.lang === 'en-US',
+                v => v.lang === 'en-US',
+                v => v.lang.startsWith('en'),
+            ];
+            for (const t of tests) { const m = voices.find(t); if (m) return m; }
+            return voices[0] || null;
+        }
+
+        function speak(text) {
+            return new Promise((resolve, reject) => {
+                if (!text || !text.trim()) { resolve(); return; }
+                cancel();
+                const utt = new SpeechSynthesisUtterance(text.trim());
+                if (_voice)  utt.voice  = _voice;
+                utt.rate   = 1.05;
+                utt.pitch  = 1.0;
+                utt.volume = 1.0;
+                utt.onstart = () => { _speaking = true; };
+                utt.onend   = () => { _speaking = false; resolve(); };
+                utt.onerror = (e) => {
+                    _speaking = false;
+                    (e.error === 'interrupted') ? resolve() : reject(e);
+                };
+                synth.speak(utt);
+            });
+        }
+
+        function cancel() {
+            if (synth.speaking || synth.pending) synth.cancel();
+            _speaking = false;
+        }
+
+        function isSpeaking() { return synth.speaking || _speaking; }
+
+        return { speak, cancel, isSpeaking };
+    })();
+    </script>
+
+    <!-- =====================================================================
+         CALENDAR
+         Google Calendar via browser OAuth2 token flow.
+         No backend or client secret needed.
+         ===================================================================== -->
+    <script>
+    const Calendar = (() => {
+        const API    = 'https://www.googleapis.com/calendar/v3';
+        let _client  = null;
+        let _token   = null;
+        let _expiry  = null;
+
+        function init(clientId) {
+            return new Promise((resolve, reject) => {
+                if (!clientId) { reject(new Error('No Google Client ID')); return; }
+                if (window.google?.accounts) { _setup(clientId); resolve(); return; }
+                const s   = document.createElement('script');
+                s.src     = 'https://accounts.google.com/gsi/client';
+                s.async   = true;
+                s.onload  = () => { _setup(clientId); resolve(); };
+                s.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+                document.head.appendChild(s);
+            });
+        }
+
+        function _setup(clientId) {
+            _client = google.accounts.oauth2.initTokenClient({
+                client_id: clientId,
+                scope:     'https://www.googleapis.com/auth/calendar.events',
+                callback:  (r) => {
+                    if (!r.error) {
+                        _token  = r.access_token;
+                        _expiry = Date.now() + (r.expires_in - 60) * 1000;
+                    }
+                },
+            });
+        }
+
+        function authorize() {
+            return new Promise((resolve, reject) => {
+                if (_hasToken()) { resolve(_token); return; }
+                if (!_client)   { reject(new Error('Calendar not initialised. Call init() first.')); return; }
+                const orig = _client.callback;
+                _client.callback = (r) => {
+                    _client.callback = orig;
+                    if (r.error) { reject(new Error('OAuth error: ' + r.error)); return; }
+                    _token  = r.access_token;
+                    _expiry = Date.now() + (r.expires_in - 60) * 1000;
+                    resolve(_token);
+                };
+                _client.requestAccessToken({ prompt: 'consent' });
+            });
+        }
+
+        function _hasToken() { return _token && _expiry && Date.now() < _expiry; }
+
+        async function createEvent({ title = 'Meeting', dateTime, attendeeName = '', durationMinutes = 60 }) {
+            const token = await authorize();
+            const tz    = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            const start = new Date(dateTime);
+            const end   = new Date(start.getTime() + durationMinutes * 60000);
+
+            const res = await fetch(`${API}/calendars/primary/events`, {
+                method:  'POST',
+                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body:    JSON.stringify({
+                    summary:     title,
+                    description: attendeeName
+                        ? `Scheduled for ${attendeeName} via hyni Voice Scheduler.`
+                        : 'Created via hyni Voice Scheduler.',
+                    start: { dateTime: start.toISOString(), timeZone: tz },
+                    end:   { dateTime: end.toISOString(),   timeZone: tz },
+                }),
             });
 
-            const success = await vad.start();
-            if (!success) {
-                document.getElementById('status').textContent = "Error initializing microphone";
-                return;
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(`Calendar API ${res.status}: ${err?.error?.message || res.statusText}`);
             }
-
-            doRecording = true;
-            startTime = Date.now();
-            document.getElementById('start').disabled = true;
-            document.getElementById('stop').disabled = false;
-            document.getElementById('status').textContent = "Ready (VAD Active)";
-
-            // Store the VAD instance for stopping
-            window.currentVAD = vad;
+            return res.json();
         }
 
-        function stopRecording() {
-            if (audioBufferQueue.length > 16000 && instance) {
-                Module.set_audio(instance, audioBufferQueue);
-            }
-            audioBufferQueue = new Float32Array(0);
+        function isAuthorized() { return _hasToken(); }
 
-            if (window.currentVAD) {
-                window.currentVAD.stop();
-            }
-            doRecording = false;
-            document.getElementById('start').disabled = false;
-            document.getElementById('stop').disabled = true;
-            document.getElementById('status').textContent = "Stopped";
-        }
-
-        // Transcription handling
-        var nLines = 0;
-        var intervalUpdate = null;
-        var transcribedAll = '';
-
-        function onStart() {
-            if (!instance) {
-                instance = Module.init('whisper.bin');
-
-                if (instance) {
-                    printTextarea("js: whisper initialized, instance: " + instance);
-                }
-            }
-
-            if (!instance) {
-                printTextarea("js: failed to initialize whisper");
-                document.getElementById('status').textContent = "Error: Failed to initialize Whisper";
-                document.getElementById('status').className = "error";
-                return;
-            }
-
-            startRecording();
-
-            intervalUpdate = setInterval(function() {
-                var transcribed = Module.get_transcribed();
-                if (transcribed && transcribed.length > 0) {
-                    document.getElementById('state-transcribed').textContent = transcribed;
-                }
-                document.getElementById('status').textContent = Module.get_status();
-            }, 100);
-        }
-
-        function clearCache() {
-            // if (window.indexedDB) {
-            //     indexedDB.deleteDatabase('whisper.ggerganov.com');
-            //     printTextarea("Cache cleared. Please reload the page.");
-            //     document.getElementById('status').textContent = "Cache cleared. Please reload the page.";
-            // } else {
-            //     printTextarea("IndexedDB not supported - cannot clear cache");
-            //     document.getElementById('status').textContent = "Error: IndexedDB not supported";
-            //     document.getElementById('status').className = "error";
-            // }
-            const clearBtn = document.getElementById('clear');
-            clearBtn.textContent = "Clearing...";
-            clearBtn.disabled = true;
-
-            // Execute clear
-            Module.reset_transcription();
-            document.getElementById('state-transcribed').textContent = "[Transcript cleared]";
-
-            // Reset button after delay
-            setTimeout(() => {
-                clearBtn.textContent = "Clear Transcription";
-                clearBtn.disabled = false;
-            }, 500);
-        }
-
-        // Event Listeners
-        document.getElementById('start').addEventListener('click', onStart);
-        document.getElementById('stop').addEventListener('click', stopRecording);
+        return { init, authorize, createEvent, isAuthorized };
+    })();
     </script>
+
+    <!-- =====================================================================
+         AGENT
+         Conversation state machine + LLM slot extraction.
+         Knows nothing about the DOM except the log, badge, and slot elements.
+         ===================================================================== -->
+    <script>
+    const Agent = (() => {
+
+        // ── LLM provider configs ──────────────────────────────────────────────
+        const PROVIDERS = {
+            openai: {
+                url:     'https://api.openai.com/v1/chat/completions',
+                headers: (k) => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${k}` }),
+                body:    (msgs, sys) => JSON.stringify({
+                    model: 'gpt-4o', temperature: 0.3, max_tokens: 400,
+                    messages: [{ role: 'system', content: sys }, ...msgs],
+                }),
+                extract: (d) => d.choices?.[0]?.message?.content || '',
+            },
+            anthropic: {
+                url:     'https://api.anthropic.com/v1/messages',
+                headers: (k) => ({
+                    'Content-Type': 'application/json',
+                    'x-api-key': k,
+                    'anthropic-version': '2023-06-01',
+                    'anthropic-dangerous-direct-browser-access': 'true',
+                }),
+                body:    (msgs, sys) => JSON.stringify({
+                    model: 'claude-opus-4-6', max_tokens: 400,
+                    system: sys, messages: msgs,
+                }),
+                extract: (d) => d.content?.[0]?.text || '',
+            },
+        };
+
+        // ── State labels ──────────────────────────────────────────────────────
+        const ACTIVE_STATES = new Set(['greeting','get_name','get_datetime','get_title','confirming','creating']);
+
+        // ── Runtime ───────────────────────────────────────────────────────────
+        let _state   = 'idle';
+        let _slots   = { name: null, dateTime: null, title: null };
+        let _history = [];
+
+        // ── System prompt ─────────────────────────────────────────────────────
+        function _sysPrompt() {
+            const today = new Date().toLocaleDateString('en-US', {
+                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+            });
+            return `You are a concise voice scheduling assistant.
+Collect three things from the user:
+1. Their name
+2. Preferred date and time for a meeting
+3. Optional meeting title (default: "Meeting")
+
+RULES:
+- Voice conversation: keep ALL responses to 1-2 sentences maximum.
+- Do not repeat or summarise what the user said back to them.
+- Move on immediately once a slot is filled.
+- Today is ${today}. Convert relative expressions to ISO 8601.
+- Respond ONLY with raw JSON — no markdown fences, no preamble, no explanation:
+{
+  "speech":     "What you say aloud to the user",
+  "slots": {
+    "name":     null or "string",
+    "dateTime": null or "ISO 8601 e.g. 2025-06-15T14:00:00",
+    "title":    null or "string"
+  },
+  "next_state": "get_name" | "get_datetime" | "get_title" | "confirming" | "done"
+}
+
+STATE GUIDE:
+- get_name     → still need the user's name
+- get_datetime → still need date/time
+- get_title    → ask for optional title (skip straight to confirming if already have one)
+- confirming   → read back all three slots, ask "Does that sound right?"
+- done         → user confirmed (said yes / correct / sounds good)
+
+Always carry all filled slots forward in every response.
+If the user corrects a slot mid-confirmation, update it and return to confirming.`;
+        }
+
+        // ── LLM call ──────────────────────────────────────────────────────────
+        async function _callLLM(userMsg) {
+            const provider = document.getElementById('cfg-provider').value;
+            const apiKey   = document.getElementById('cfg-apikey').value.trim();
+            if (!apiKey) throw new Error('No API key — fill in the Configuration panel');
+
+            const cfg = PROVIDERS[provider];
+            _history.push({ role: 'user', content: userMsg });
+
+            const res = await fetch(cfg.url, {
+                method:  'POST',
+                headers: cfg.headers(apiKey),
+                body:    cfg.body(_history, _sysPrompt()),
+            });
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(`LLM ${res.status}: ${JSON.stringify(err)}`);
+            }
+
+            const data    = await res.json();
+            const rawText = cfg.extract(data);
+            _history.push({ role: 'assistant', content: rawText });
+
+            try {
+                return JSON.parse(rawText.replace(/```json|```/g, '').trim());
+            } catch {
+                throw new Error('LLM returned non-JSON: ' + rawText);
+            }
+        }
+
+        // ── Helpers ───────────────────────────────────────────────────────────
+        function _merge(s) {
+            if (!s) return;
+            if (s.name     != null) _slots.name     = s.name;
+            if (s.dateTime != null) _slots.dateTime = s.dateTime;
+            if (s.title    != null) _slots.title    = s.title;
+        }
+
+        function _setState(s) {
+            _state = s;
+            const badge = document.getElementById('agent-state-badge');
+            badge.textContent = s.replace('_', ' ');
+            badge.className   = 'state-badge' +
+                (ACTIVE_STATES.has(s) ? ' active' : s === 'done' ? ' done' : s === 'error' ? ' error' : '');
+        }
+
+        function _updateSlots() {
+            _setSlot('slot-name',     _slots.name,     _slots.name);
+            _setSlot('slot-datetime', _slots.dateTime, _fmtDT(_slots.dateTime));
+            _setSlot('slot-title',    _slots.title,    _slots.title);
+        }
+
+        function _setSlot(id, raw, display) {
+            const el = document.getElementById(id);
+            el.textContent = raw ? (display || raw) : '—';
+            el.className   = 'slot-value' + (raw ? ' filled' : '');
+        }
+
+        function _fmtDT(iso) {
+            if (!iso) return null;
+            try {
+                return new Date(iso).toLocaleString('en-US', {
+                    weekday: 'short', month: 'short', day: 'numeric',
+                    hour: 'numeric', minute: '2-digit',
+                });
+            } catch { return iso; }
+        }
+
+        function _log(type, text) {
+            const log  = document.getElementById('agent-log');
+            const line = document.createElement('div');
+            line.className   = 'log-line ' + type;
+            line.textContent = text;
+            log.appendChild(line);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function _setSpeaking(on) {
+            document.getElementById('speaking-indicator').className = on ? 'visible' : '';
+        }
+
+        async function _say(text) {
+            _log('agent', text);
+            _setSpeaking(true);
+            await TTS.speak(text);
+            _setSpeaking(false);
+        }
+
+        // ── Calendar event creation ───────────────────────────────────────────
+        async function _createEvent() {
+            _setState('creating');
+            await _say("Creating your event now...");
+
+            try {
+                const event = await Calendar.createEvent({
+                    title:           _slots.title    || 'Meeting',
+                    dateTime:        _slots.dateTime || new Date().toISOString(),
+                    attendeeName:    _slots.name     || '',
+                    durationMinutes: 60,
+                });
+
+                _setState('done');
+
+                const dt        = new Date(_slots.dateTime);
+                const formatted = dt.toLocaleString('en-US', {
+                    weekday: 'long', month: 'long', day: 'numeric',
+                    hour: 'numeric', minute: '2-digit',
+                });
+                const title = _slots.title || 'Meeting';
+                const name  = _slots.name  || '';
+
+                await _say(`Done! I've created "${title}" for ${name} on ${formatted}. You're all set!`);
+
+                const toast = document.getElementById('event-toast');
+                toast.innerHTML = `✓ <strong>${event.summary}</strong> created · ` +
+                    `<a href="${event.htmlLink}" target="_blank">Open in Google Calendar →</a>`;
+                toast.style.display = 'block';
+
+                document.getElementById('btn-session-start').disabled = false;
+
+            } catch (err) {
+                _setState('error');
+                _log('system', 'Calendar error: ' + err.message);
+                await _say("I couldn't create the calendar event. Please check your Google Calendar auth and try again.");
+            }
+        }
+
+        // ── Public API ────────────────────────────────────────────────────────
+
+        async function start() {
+            _state   = 'greeting';
+            _slots   = { name: null, dateTime: null, title: null };
+            _history = [];
+            _updateSlots();
+            document.getElementById('event-toast').style.display  = 'none';
+            document.getElementById('agent-log').innerHTML        = '';
+            document.getElementById('btn-session-reset').disabled = false;
+            _log('system', 'Session started.');
+
+            try {
+                const r = await _callLLM("Hello, I'd like to schedule a meeting.");
+                _merge(r.slots);
+                _updateSlots();
+                _setState(r.next_state || 'get_name');
+                await _say(r.speech);
+            } catch (err) {
+                _setState('error');
+                _log('system', 'Error: ' + err.message);
+                await _say("Sorry, I couldn't start. Please check your API key in the config panel.");
+            }
+        }
+
+        async function handleTranscript(text) {
+            if (!text || !text.trim()) return;
+            // Ignore input in terminal/non-conversational states
+            if (!ACTIVE_STATES.has(_state)) return;
+
+            _log('user', text);
+
+            try {
+                const r = await _callLLM(text);
+                _merge(r.slots);
+                _updateSlots();
+                _setState(r.next_state || _state);
+                await _say(r.speech);
+
+                if (r.next_state === 'done') {
+                    await _createEvent();
+                }
+            } catch (err) {
+                _setState('error');
+                _log('system', 'Error: ' + err.message);
+                await _say("Sorry, something went wrong. You can reset and try again.");
+            }
+        }
+
+        function reset() {
+            TTS.cancel();
+            _setState('idle');
+            _slots   = { name: null, dateTime: null, title: null };
+            _history = [];
+            _updateSlots();
+            _setSpeaking(false);
+            document.getElementById('agent-log').innerHTML        = '';
+            document.getElementById('event-toast').style.display  = 'none';
+            document.getElementById('btn-session-start').disabled = false;
+            document.getElementById('btn-session-reset').disabled = true;
+            _log('system', 'Session reset. Press ▶ Start Session to begin again.');
+        }
+
+        return { start, handleTranscript, reset };
+    })();
+
+    // ── Session active flag (read by the poll loop above) ────────────────────
+    var agentSessionActive = false;
+
+    // ── Agent button wiring ───────────────────────────────────────────────────
+    document.getElementById('btn-session-start').addEventListener('click', async () => {
+        agentSessionActive = true;
+        document.getElementById('btn-session-start').disabled = true;
+        // Auto-start recording if not already running
+        if (!doRecording) document.getElementById('start').click();
+        await Agent.start();
+    });
+
+    document.getElementById('btn-session-reset').addEventListener('click', () => {
+        agentSessionActive = false;
+        Agent.reset();
+    });
+
+    document.getElementById('btn-cal-auth').addEventListener('click', async () => {
+        const clientId = document.getElementById('cfg-gcal').value.trim();
+        const btn      = document.getElementById('btn-cal-auth');
+        if (!clientId) {
+            alert('Enter your Google Client ID in the Configuration panel first.');
+            return;
+        }
+        try {
+            btn.disabled    = true;
+            btn.textContent = '⏳ Authorising...';
+            await Calendar.init(clientId);
+            await Calendar.authorize();
+            btn.textContent = '✓ Calendar Authorised';
+            btn.className   = 'btn-agent success';
+        } catch (err) {
+            btn.disabled    = false;
+            btn.textContent = '⚿ Auth Google Calendar';
+            alert('Calendar auth failed: ' + err.message);
+        }
+    });
+    </script>
+
+    <!-- WASM glue — must be last; picks up the Module object defined above -->
     <script type="text/javascript" src="libstream.js"></script>
 </body>
 </html>

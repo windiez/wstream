@@ -14,6 +14,8 @@ target_link_libraries(${TARGET} PRIVATE
     common
 )
 
+target_compile_options(${TARGET} PRIVATE -std=c++17)
+
 set_target_properties(${TARGET} PROPERTIES LINK_FLAGS " \
     --bind \
     -s USE_PTHREADS=1 \
