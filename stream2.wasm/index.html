@@ -200,25 +200,13 @@
         }
         #event-toast a { color: #34d399; text-decoration: underline; }
 
-        #config-panel {
-            margin-top: 0.75rem; padding: 0.75rem;
+        #backend-status {
+            margin-top: 0.75rem; padding: 0.5rem 0.75rem;
             background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.25rem;
+            font-family: 'Fira Code', monospace; font-size: 0.72rem; color: var(--gray);
         }
-        #config-panel h2 { margin-top: 0; font-size: 0.9rem; }
-
-        .config-row {
-            display: flex; align-items: center; gap: 0.5rem;
-            margin-bottom: 0.4rem; flex-wrap: wrap;
-        }
-        .config-row label { font-size: 0.75rem; color: var(--dark); min-width: 120px; }
-        .config-row input,
-        .config-row select {
-            font-family: 'Fira Code', monospace; font-size: 0.75rem;
-            padding: 0.3rem 0.5rem; border: 1px solid #cbd5e1;
-            border-radius: 0.2rem; background: white; color: var(--dark);
-            flex: 1; min-width: 0;
-        }
-        .config-note { font-size: 0.7rem; color: var(--gray); margin-top: 0.25rem; }
+        #backend-status .ok  { color: var(--success); }
+        #backend-status .bad { color: var(--error); }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code&display=swap" rel="stylesheet">
 </head>
@@ -247,12 +235,28 @@
             <button id="start" disabled>Start Recording</button>
             <button id="stop"  disabled>Stop Recording</button>
             <button id="clear" onclick="clearCache()">Clear Transcription</button>
+            <label style="font-size:0.8rem; margin-left:0.5rem; user-select:none;">
+                <input type="checkbox" id="use-vad" checked> Use VAD
+            </label>
         </div>
 
         <!-- ── LIVE TRANSCRIPTION (unchanged) ───────────────────────── -->
         <div id="transcription-container">
             <h2>Live Transcription</h2>
             <div id="state-transcribed" class="console-style">[Your transcribed text will appear here in real-time]</div>
+        </div>
+
+        <!-- ── A/B CAPTURE-MODE TEST ────────────────────────────────── -->
+        <div id="ab-test-container" style="margin-top:1rem;">
+            <h2>A/B Capture Test <span style="color:var(--gray);font-weight:400;">(5 scripted lines)</span></h2>
+            <div style="margin-bottom:0.5rem;">
+                <button id="ab-run-vad"  disabled>Run VAD ON test</button>
+                <button id="ab-run-cont" disabled>Run VAD OFF test</button>
+                <button id="ab-next"     disabled style="background:var(--success);">Next line &rarr;</button>
+                <button id="ab-abort"    disabled style="background:#64748b;">Abort</button>
+            </div>
+            <div id="ab-prompt" style="font-size:0.85rem;font-weight:600;color:var(--primary);min-height:1.2rem;margin-bottom:0.4rem;"></div>
+            <pre id="ab-results" class="console-style" style="min-height:8rem;margin:0;">[Load a whisper model first. Then click a Run button, speak each prompted line, wait for it to appear in Live Transcription above, then click Next.]</pre>
         </div>
 
         <!-- ── CONSOLE OUTPUT (unchanged) ───────────────────────────── -->
@@ -267,28 +271,11 @@
         <div id="agent-section">
             <h2>🗓 Voice Scheduling Agent</h2>
 
-            <!-- Config — fill in keys here, no page reload needed -->
-            <div id="config-panel">
-                <h2>Configuration</h2>
-                <div class="config-row">
-                    <label>LLM Provider</label>
-                    <select id="cfg-provider">
-                        <option value="openai">OpenAI (gpt-4o)</option>
-                        <option value="anthropic">Anthropic (claude-opus-4-6)</option>
-                    </select>
-                </div>
-                <div class="config-row">
-                    <label>API Key</label>
-                    <input type="password" id="cfg-apikey" placeholder="sk-..." autocomplete="off" />
-                </div>
-                <div class="config-row">
-                    <label>Google Client ID</label>
-                    <input type="text" id="cfg-gcal" placeholder="xxxxxx.apps.googleusercontent.com" />
-                </div>
-                <p class="config-note">
-                    Keys stay in memory only — sent only to the respective API endpoint, nowhere else.
-                    See README for Google Calendar OAuth setup (~5 min, one-time).
-                </p>
+            <!-- Backend status (read-only; populated from GET /api/config) -->
+            <div id="backend-status">
+                backend: <span id="bs-llm">checking...</span>
+                &nbsp;&middot;&nbsp;
+                calendar: <span id="bs-cal">checking...</span>
             </div>
 
             <!-- State + speaking indicator -->
@@ -304,7 +291,7 @@
             <div class="agent-controls">
                 <button class="btn-agent"           id="btn-session-start" disabled>▶ Start Session</button>
                 <button class="btn-agent secondary" id="btn-session-reset" disabled>↺ Reset</button>
-                <button class="btn-agent success"   id="btn-cal-auth">⚿ Auth Google Calendar</button>
+                <button class="btn-agent success"   id="btn-cal-auth" disabled>⚿ Auth Google Calendar</button>
             </div>
 
             <!-- Log + slots -->
@@ -407,6 +394,62 @@
             this.processor?.disconnect();
             this.audioContext?.close();
             this.audioBuffer = [];
+        }
+    }
+
+    // ── Continuous capture (VAD bypass) ──────────────────────────────────────
+    // Buffers raw mic audio unconditionally and flushes to whisper on a fixed
+    // interval. Same start()/stop() shape as SimpleVAD so stopRecording() does
+    // not need to know which mode is active.
+    class ContinuousCapture {
+        constructor({intervalMs = 3000, overlapMs = 500, onFlush = null}) {
+            this.intervalMs     = intervalMs;
+            this.overlapSamples = Math.floor(kSampleRate * overlapMs / 1000);
+            this.minSamples     = kSampleRate; // never send < 1s
+            this.onFlush        = onFlush;
+            this.audioContext   = null;
+            this.processor      = null;
+            this.buffer         = new Float32Array(0);
+            this.timer          = null;
+        }
+
+        async start() {
+            try {
+                this.audioContext = new AudioContext({sampleRate: kSampleRate});
+                const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+                const source = this.audioContext.createMediaStreamSource(stream);
+                this.processor = this.audioContext.createScriptProcessor(1024, 1, 1);
+                this.processor.onaudioprocess = (e) => {
+                    const input = e.inputBuffer.getChannelData(0);
+                    const next  = new Float32Array(this.buffer.length + input.length);
+                    next.set(this.buffer);
+                    next.set(input, this.buffer.length);
+                    this.buffer = next;
+                };
+                source.connect(this.processor);
+                this.processor.connect(this.audioContext.destination);
+                this.timer = setInterval(() => this._flush(false), this.intervalMs);
+                return true;
+            } catch (err) {
+                console.error("ContinuousCapture init error:", err);
+                return false;
+            }
+        }
+
+        _flush(final) {
+            if (this.buffer.length < this.minSamples || !instance) return;
+            this.onFlush?.(this.buffer.length);
+            Module.set_audio(instance, this.buffer);
+            // keep a short tail so the next chunk has lead-in context; drop it on final flush
+            this.buffer = final ? new Float32Array(0) : this.buffer.slice(-this.overlapSamples);
+        }
+
+        stop() {
+            if (this.timer) { clearInterval(this.timer); this.timer = null; }
+            this._flush(true);
+            this.processor?.disconnect();
+            this.audioContext?.close();
+            this.buffer = new Float32Array(0);
         }
     }
 
@@ -519,30 +562,44 @@
         Module.set_status("");
         document.getElementById('status').textContent = "Initializing...";
 
-        const vad = new SimpleVAD({
-            threshold:    0.025,
-            debounceTime: 500,
-            minDuration:  1000,
-            onVoiceStart: () => {
-                document.getElementById('status').textContent = "Speaking...";
-            },
-            onVoiceEnd: (audioData) => {
-                const newBuffer = new Float32Array(audioBufferQueue.length + audioData.length);
-                newBuffer.set(audioBufferQueue);
-                newBuffer.set(audioData, audioBufferQueue.length);
-                audioBufferQueue = newBuffer;
+        const useVAD = document.getElementById('use-vad').checked;
+        let capture;
 
-                if (audioBufferQueue.length >= REQUIRED_SAMPLES) {
-                    document.getElementById('status').textContent = "Processing...";
-                    if (instance) {
-                        Module.set_audio(instance, audioBufferQueue);
-                        audioBufferQueue = audioBufferQueue.slice(-(16000 * 0.5));
+        if (useVAD) {
+            capture = new SimpleVAD({
+                threshold:    0.025,
+                debounceTime: 500,
+                minDuration:  1000,
+                onVoiceStart: () => {
+                    document.getElementById('status').textContent = "Speaking... (VAD)";
+                },
+                onVoiceEnd: (audioData) => {
+                    const newBuffer = new Float32Array(audioBufferQueue.length + audioData.length);
+                    newBuffer.set(audioBufferQueue);
+                    newBuffer.set(audioData, audioBufferQueue.length);
+                    audioBufferQueue = newBuffer;
+
+                    if (audioBufferQueue.length >= REQUIRED_SAMPLES) {
+                        document.getElementById('status').textContent = "Processing... (VAD)";
+                        if (instance) {
+                            Module.set_audio(instance, audioBufferQueue);
+                            audioBufferQueue = audioBufferQueue.slice(-(16000 * 0.5));
+                        }
                     }
                 }
-            }
-        });
+            });
+        } else {
+            capture = new ContinuousCapture({
+                intervalMs: 3000,
+                overlapMs:  500,
+                onFlush: (nSamples) => {
+                    const secs = (nSamples / kSampleRate).toFixed(1);
+                    document.getElementById('status').textContent = `Processing ${secs}s... (Continuous)`;
+                }
+            });
+        }
 
-        const success = await vad.start();
+        const success = await capture.start();
         if (!success) {
             document.getElementById('status').textContent = "Error initializing microphone";
             return;
@@ -550,10 +607,13 @@
 
         doRecording = true;
         startTime   = Date.now();
-        document.getElementById('start').disabled = true;
-        document.getElementById('stop').disabled  = false;
-        document.getElementById('status').textContent = "Ready (VAD Active)";
-        window.currentVAD = vad;
+        document.getElementById('start').disabled   = true;
+        document.getElementById('stop').disabled    = false;
+        document.getElementById('use-vad').disabled = true;  // mode locked until Stop
+        document.getElementById('status').textContent = useVAD
+            ? "Ready (VAD Active)"
+            : "Ready (Continuous - 3s chunks)";
+        window.currentVAD = capture;  // legacy name; both classes share start()/stop()
     }
 
     function stopRecording() {
@@ -563,8 +623,9 @@
         audioBufferQueue = new Float32Array(0);
         if (window.currentVAD) window.currentVAD.stop();
         doRecording = false;
-        document.getElementById('start').disabled = false;
-        document.getElementById('stop').disabled  = true;
+        document.getElementById('start').disabled   = false;
+        document.getElementById('stop').disabled    = true;
+        document.getElementById('use-vad').disabled = false;
         document.getElementById('status').textContent = "Stopped";
     }
 
@@ -617,6 +678,140 @@
 
     document.getElementById('start').addEventListener('click', onStart);
     document.getElementById('stop').addEventListener('click',  stopRecording);
+
+    // ── A/B capture-mode test harness ─────────────────────────────────────────
+    // Scores VAD-on vs VAD-off against 5 scripted utterances. Purely client-side;
+    // reads the same #state-transcribed element the poll loop already updates.
+    (function () {
+        const LINES = [
+            { text: "My name is Brian.",       keys: ["name", "brian"] },
+            { text: "Tomorrow at 7 PM.",       keys: ["tomorrow", ["7","seven"], ["pm","p.m"]] },
+            { text: "March 22nd at 7 PM.",     keys: ["march", ["22","22nd","twenty"], ["7","seven"], ["pm","p.m"]] },
+            { text: "Title is Team Sync.",     keys: ["team", "sync"] },
+            { text: "Yes, that is correct.",   keys: ["yes", "correct"] },
+        ];
+
+        const el = (id) => document.getElementById(id);
+        const btnVad   = el('ab-run-vad');
+        const btnCont  = el('ab-run-cont');
+        const btnNext  = el('ab-next');
+        const btnAbort = el('ab-abort');
+        const promptEl = el('ab-prompt');
+        const resultEl = el('ab-results');
+
+        let run = null;  // { mode, idx, rows, startedRecording }
+
+        function norm(s) {
+            return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        }
+
+        function score(expected, heard) {
+            const nExp = norm(expected.text);
+            const nGot = norm(heard);
+            if (nGot && nGot === nExp) return { verdict: 'exact', pts: 1, hits: expected.keys.length };
+
+            const tokens = new Set(nGot.split(' ').filter(Boolean));
+            let hits = 0;
+            for (const k of expected.keys) {
+                const alts = Array.isArray(k) ? k : [k];
+                if (alts.some(a => tokens.has(norm(a)))) hits++;
+            }
+            const ratio = hits / expected.keys.length;
+            if (ratio >= 0.5) return { verdict: 'partial', pts: 0.5, hits };
+            return { verdict: 'wrong', pts: 0, hits };
+        }
+
+        function render() {
+            if (!run) return;
+            const lines = run.rows.map((r, i) => {
+                const tag = r.verdict === 'exact' ? '[exact]  '
+                          : r.verdict === 'partial' ? '[partial]'
+                          : '[wrong]  ';
+                return `${tag} ${i+1}. expect: "${LINES[i].text}"\n          heard:  "${r.heard}"  (keys ${r.hits}/${LINES[i].keys.length})`;
+            });
+            let out = `mode: ${run.mode}\n` + '-'.repeat(60) + '\n' + lines.join('\n');
+            if (run.idx >= LINES.length) {
+                const total = run.rows.reduce((s, r) => s + r.pts, 0);
+                const exact = run.rows.filter(r => r.verdict === 'exact').length;
+                const part  = run.rows.filter(r => r.verdict === 'partial').length;
+                out += '\n' + '-'.repeat(60);
+                out += `\nSCORE: ${total}/5   (exact: ${exact}, partial: ${part}, wrong: ${5-exact-part})`;
+            }
+            resultEl.textContent = out;
+        }
+
+        function setButtons(running) {
+            btnVad.disabled   = running || !instance;
+            btnCont.disabled  = running || !instance;
+            btnNext.disabled  = !running;
+            btnAbort.disabled = !running;
+        }
+
+        function showPrompt() {
+            if (!run || run.idx >= LINES.length) { promptEl.textContent = ''; return; }
+            promptEl.textContent = `Say line ${run.idx + 1} of ${LINES.length}:  "${LINES[run.idx].text}"   (wait for transcript above, then click Next)`;
+        }
+
+        async function begin(mode) {
+            // force the requested capture mode and (re)start recording
+            if (doRecording) stopRecording();
+            el('use-vad').checked = (mode === 'VAD ON');
+            // clear stale transcript so the first Next doesn't grab leftovers
+            Module.reset_transcription();
+            el('state-transcribed').textContent = '[waiting...]';
+
+            run = { mode, idx: 0, rows: [], startedRecording: !doRecording };
+            setButtons(true);
+            resultEl.textContent = `mode: ${mode}\n` + '-'.repeat(60) + '\n(speak each line, then click Next)';
+            showPrompt();
+
+            onStart();  // initializes whisper (if needed) + startRecording() with the chosen mode
+        }
+
+        function next() {
+            if (!run) return;
+            const heard = el('state-transcribed').textContent;
+            const sc = score(LINES[run.idx], heard);
+            run.rows.push({ heard, ...sc });
+            run.idx++;
+
+            // reset transcript for the next line so we capture a clean window
+            Module.reset_transcription();
+            el('state-transcribed').textContent = '[waiting...]';
+
+            render();
+            showPrompt();
+
+            if (run.idx >= LINES.length) finish();
+        }
+
+        function finish() {
+            setButtons(false);
+            promptEl.textContent = 'Done. Run the other mode to compare.';
+            if (run && run.startedRecording && doRecording) stopRecording();
+            run = null;
+        }
+
+        function abort() {
+            resultEl.textContent += '\n[aborted]';
+            finish();
+        }
+
+        btnVad.addEventListener('click',   () => begin('VAD ON'));
+        btnCont.addEventListener('click',  () => begin('VAD OFF'));
+        btnNext.addEventListener('click',  next);
+        btnAbort.addEventListener('click', abort);
+
+        // Enable run buttons once whisper is initialised (instance is set in onStart,
+        // but the model is in FS as soon as storeFS runs). Poll cheaply.
+        const enablePoll = setInterval(() => {
+            if (model_whisper) {
+                btnVad.disabled  = false;
+                btnCont.disabled = false;
+                clearInterval(enablePoll);
+            }
+        }, 300);
+    })();
     </script>
 
     <!-- =====================================================================
@@ -774,33 +969,6 @@
     <script>
     const Agent = (() => {
 
-        // ── LLM provider configs ──────────────────────────────────────────────
-        const PROVIDERS = {
-            openai: {
-                url:     'https://api.openai.com/v1/chat/completions',
-                headers: (k) => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${k}` }),
-                body:    (msgs, sys) => JSON.stringify({
-                    model: 'gpt-4o', temperature: 0.3, max_tokens: 400,
-                    messages: [{ role: 'system', content: sys }, ...msgs],
-                }),
-                extract: (d) => d.choices?.[0]?.message?.content || '',
-            },
-            anthropic: {
-                url:     'https://api.anthropic.com/v1/messages',
-                headers: (k) => ({
-                    'Content-Type': 'application/json',
-                    'x-api-key': k,
-                    'anthropic-version': '2023-06-01',
-                    'anthropic-dangerous-direct-browser-access': 'true',
-                }),
-                body:    (msgs, sys) => JSON.stringify({
-                    model: 'claude-opus-4-6', max_tokens: 400,
-                    system: sys, messages: msgs,
-                }),
-                extract: (d) => d.content?.[0]?.text || '',
-            },
-        };
-
         // ── State labels ──────────────────────────────────────────────────────
         const ACTIVE_STATES = new Set(['greeting','get_name','get_datetime','get_title','confirming','creating']);
 
@@ -809,73 +977,30 @@
         let _slots   = { name: null, dateTime: null, title: null };
         let _history = [];
 
-        // ── System prompt ─────────────────────────────────────────────────────
-        function _sysPrompt() {
+        // ── LLM call (proxied via backend; provider + key live in server env) ─
+        async function _callLLM(userMsg) {
+            _history.push({ role: 'user', content: userMsg });
+
             const today = new Date().toLocaleDateString('en-US', {
                 weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
             });
-            return `You are a concise voice scheduling assistant.
-Collect three things from the user:
-1. Their name
-2. Preferred date and time for a meeting
-3. Optional meeting title (default: "Meeting")
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-RULES:
-- Voice conversation: keep ALL responses to 1-2 sentences maximum.
-- Do not repeat or summarise what the user said back to them.
-- Move on immediately once a slot is filled.
-- Today is ${today}. Convert relative expressions to ISO 8601.
-- Respond ONLY with raw JSON — no markdown fences, no preamble, no explanation:
-{
-  "speech":     "What you say aloud to the user",
-  "slots": {
-    "name":     null or "string",
-    "dateTime": null or "ISO 8601 e.g. 2025-06-15T14:00:00",
-    "title":    null or "string"
-  },
-  "next_state": "get_name" | "get_datetime" | "get_title" | "confirming" | "done"
-}
-
-STATE GUIDE:
-- get_name     → still need the user's name
-- get_datetime → still need date/time
-- get_title    → ask for optional title (skip straight to confirming if already have one)
-- confirming   → read back all three slots, ask "Does that sound right?"
-- done         → user confirmed (said yes / correct / sounds good)
-
-Always carry all filled slots forward in every response.
-If the user corrects a slot mid-confirmation, update it and return to confirming.`;
-        }
-
-        // ── LLM call ──────────────────────────────────────────────────────────
-        async function _callLLM(userMsg) {
-            const provider = document.getElementById('cfg-provider').value;
-            const apiKey   = document.getElementById('cfg-apikey').value.trim();
-            if (!apiKey) throw new Error('No API key — fill in the Configuration panel');
-
-            const cfg = PROVIDERS[provider];
-            _history.push({ role: 'user', content: userMsg });
-
-            const res = await fetch(cfg.url, {
+            const res = await fetch('/api/chat', {
                 method:  'POST',
-                headers: cfg.headers(apiKey),
-                body:    cfg.body(_history, _sysPrompt()),
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ history: _history, today, tz }),
             });
 
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                throw new Error(`LLM ${res.status}: ${JSON.stringify(err)}`);
+                throw new Error(`Backend ${res.status}: ${err.detail || res.statusText}`);
             }
 
-            const data    = await res.json();
-            const rawText = cfg.extract(data);
-            _history.push({ role: 'assistant', content: rawText });
-
-            try {
-                return JSON.parse(rawText.replace(/```json|```/g, '').trim());
-            } catch {
-                throw new Error('LLM returned non-JSON: ' + rawText);
-            }
+            const parsed = await res.json();
+            // Record assistant turn so the server sees its own prior JSON in context
+            _history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+            return parsed;
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────
@@ -916,6 +1041,13 @@ If the user corrects a slot mid-confirmation, update it and return to confirming
             } catch { return iso; }
         }
 
+        // Returns true only for a non-empty string that parses to a valid date.
+        function _isValidISO(str) {
+            if (!str || typeof str !== 'string') return false;
+            const d = new Date(str);
+            return !isNaN(d.getTime());
+        }
+
         function _log(type, text) {
             const log  = document.getElementById('agent-log');
             const line = document.createElement('div');
@@ -938,14 +1070,27 @@ If the user corrects a slot mid-confirmation, update it and return to confirming
 
         // ── Calendar event creation ───────────────────────────────────────────
         async function _createEvent() {
+            // Safety guard: never create an event if required slots are absent or
+            // if dateTime is not a parseable date string. This prevents garbage
+            // events from LLM hallucination or prompt injection that prematurely
+            // triggers the done state.
+            if (!_slots.name || !_isValidISO(_slots.dateTime)) {
+                _setState('error');
+                _log('system', 'ERROR: event creation blocked - required slots incomplete (name=' +
+                    _slots.name + ', dateTime=' + _slots.dateTime + ')');
+                await _say("I'm missing some details. Let me ask again.");
+                _setState('confirming');
+                return;
+            }
+
             _setState('creating');
             await _say("Creating your event now...");
 
             try {
                 const event = await Calendar.createEvent({
-                    title:           _slots.title    || 'Meeting',
-                    dateTime:        _slots.dateTime || new Date().toISOString(),
-                    attendeeName:    _slots.name     || '',
+                    title:           _slots.title || 'Meeting',
+                    dateTime:        _slots.dateTime,
+                    attendeeName:    _slots.name,
                     durationMinutes: 60,
                 });
 
@@ -1015,7 +1160,17 @@ If the user corrects a slot mid-confirmation, update it and return to confirming
                 await _say(r.speech);
 
                 if (r.next_state === 'done') {
-                    await _createEvent();
+                    // Double-check slots before delegating to _createEvent.
+                    // The server already rejects done with missing slots, but
+                    // this guard also catches any race where _merge() did not
+                    // yet store a valid dateTime (e.g. slots.dateTime was null
+                    // in this specific response).
+                    if (!_slots.name || !_isValidISO(_slots.dateTime)) {
+                        _log('system', 'WARN: premature done transition - slots incomplete; returning to confirming.');
+                        _setState('confirming');
+                    } else {
+                        await _createEvent();
+                    }
                 }
             } catch (err) {
                 _setState('error');
@@ -1059,17 +1214,11 @@ If the user corrects a slot mid-confirmation, update it and return to confirming
     });
 
     document.getElementById('btn-cal-auth').addEventListener('click', async () => {
-        const clientId = document.getElementById('cfg-gcal').value.trim();
-        const btn      = document.getElementById('btn-cal-auth');
-        if (!clientId) {
-            alert('Enter your Google Client ID in the Configuration panel first.');
-            return;
-        }
+        const btn = document.getElementById('btn-cal-auth');
         try {
             btn.disabled    = true;
             btn.textContent = '⏳ Authorising...';
-            await Calendar.init(clientId);
-            await Calendar.authorize();
+            await Calendar.authorize();  // Calendar.init() already ran during bootstrap
             btn.textContent = '✓ Calendar Authorised';
             btn.className   = 'btn-agent success';
         } catch (err) {
@@ -1078,6 +1227,42 @@ If the user corrects a slot mid-confirmation, update it and return to confirming
             alert('Calendar auth failed: ' + err.message);
         }
     });
+
+    // ── Backend config bootstrap ─────────────────────────────────────────────
+    // Pulls GOOGLE_CLIENT_ID and LLM-configured flag from GET /api/config.
+    // Runs once on page load; no secrets travel here.
+    (async function bootstrapBackendConfig() {
+        const llmEl = document.getElementById('bs-llm');
+        const calEl = document.getElementById('bs-cal');
+        const set = (el, ok, label) => { el.textContent = label; el.className = ok ? 'ok' : 'bad'; };
+
+        let cfg;
+        try {
+            const res = await fetch('/api/config');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            cfg = await res.json();
+        } catch (err) {
+            set(llmEl, false, 'unreachable');
+            set(calEl, false, 'unreachable');
+            console.error('Backend config fetch failed:', err);
+            return;
+        }
+
+        set(llmEl, cfg.llmConfigured, cfg.llmConfigured ? 'ready' : 'LLM_API_KEY not set');
+
+        if (cfg.googleClientId) {
+            try {
+                await Calendar.init(cfg.googleClientId);
+                set(calEl, true, 'ready (click Auth)');
+                document.getElementById('btn-cal-auth').disabled = false;
+            } catch (err) {
+                set(calEl, false, 'GSI load failed');
+                console.error('Calendar.init failed:', err);
+            }
+        } else {
+            set(calEl, false, 'GOOGLE_CLIENT_ID not set');
+        }
+    })();
     </script>
 
     <!-- WASM glue — must be last; picks up the Module object defined above -->
