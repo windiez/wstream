@@ -200,25 +200,13 @@
         }
         #event-toast a { color: #34d399; text-decoration: underline; }
 
-        #config-panel {
-            margin-top: 0.75rem; padding: 0.75rem;
+        #backend-status {
+            margin-top: 0.75rem; padding: 0.5rem 0.75rem;
             background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.25rem;
+            font-family: 'Fira Code', monospace; font-size: 0.72rem; color: var(--gray);
         }
-        #config-panel h2 { margin-top: 0; font-size: 0.9rem; }
-
-        .config-row {
-            display: flex; align-items: center; gap: 0.5rem;
-            margin-bottom: 0.4rem; flex-wrap: wrap;
-        }
-        .config-row label { font-size: 0.75rem; color: var(--dark); min-width: 120px; }
-        .config-row input,
-        .config-row select {
-            font-family: 'Fira Code', monospace; font-size: 0.75rem;
-            padding: 0.3rem 0.5rem; border: 1px solid #cbd5e1;
-            border-radius: 0.2rem; background: white; color: var(--dark);
-            flex: 1; min-width: 0;
-        }
-        .config-note { font-size: 0.7rem; color: var(--gray); margin-top: 0.25rem; }
+        #backend-status .ok  { color: var(--success); }
+        #backend-status .bad { color: var(--error); }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code&display=swap" rel="stylesheet">
 </head>
@@ -247,6 +235,9 @@
             <button id="start" disabled>Start Recording</button>
             <button id="stop"  disabled>Stop Recording</button>
             <button id="clear" onclick="clearCache()">Clear Transcription</button>
+            <label style="font-size:0.8rem; margin-left:0.5rem; user-select:none;">
+                <input type="checkbox" id="use-vad" checked> Use VAD
+            </label>
         </div>
 
         <!-- ── LIVE TRANSCRIPTION (unchanged) ───────────────────────── -->
@@ -254,6 +245,32 @@
             <h2>Live Transcription</h2>
             <div id="state-transcribed" class="console-style">[Your transcribed text will appear here in real-time]</div>
         </div>
+
+        <!-- ── A/B CAPTURE-MODE TEST ────────────────────────────────── -->
+        <details id="ab-test-container" style="margin-top:1rem;">
+          <summary style="cursor:pointer;font-size:1.1rem;font-weight:600;padding:0.4rem 0;">&#9881; A/B Capture Test <span style="color:var(--gray);font-weight:400;">(5 scripted lines)</span></summary>
+        <div>
+            <div style="margin-bottom:0.5rem;">
+                <button id="ab-run-vad"  disabled>Run VAD ON test</button>
+                <button id="ab-run-cont" disabled>Run VAD OFF test</button>
+                <button id="ab-next"     disabled style="background:var(--success);">Next line &rarr;</button>
+                <button id="ab-abort"    disabled style="background:#64748b;">Abort</button>
+            </div>
+            <div id="ab-prompt" style="font-size:0.85rem;font-weight:600;color:var(--primary);min-height:1.2rem;margin-bottom:0.4rem;"></div>
+            <pre id="ab-results" class="console-style" style="min-height:8rem;margin:0;">[Load a whisper model first. Then click a Run button, speak each prompted line, wait for it to appear in Live Transcription above, then click Next.]</pre>
+        </div>
+        </details>
+
+        <!-- ── PROVIDER SETTINGS ─────────────────────────────────────── -->
+        <details id="provider-settings" style="margin-top:1rem;">
+          <summary style="cursor:pointer;font-size:1.1rem;font-weight:600;padding:0.4rem 0;">&#9881; Provider Settings</summary>
+          <div style="padding:0.6rem 0;display:flex;gap:0.5rem;align-items:center;">
+            <span style="font-size:0.9rem;">LLM backend:</span>
+            <button id="btn-openai" onclick="setProvider('openai')">OpenAI</button>
+            <button id="btn-anthropic" onclick="setProvider('anthropic')">Anthropic</button>
+            <span id="provider-status" style="font-size:0.85rem;color:var(--gray);"></span>
+          </div>
+        </details>
 
         <!-- ── CONSOLE OUTPUT (unchanged) ───────────────────────────── -->
         <div id="output-container">
@@ -267,28 +284,11 @@
         <div id="agent-section">
             <h2>🗓 Voice Scheduling Agent</h2>
 
-            <!-- Config — fill in keys here, no page reload needed -->
-            <div id="config-panel">
-                <h2>Configuration</h2>
-                <div class="config-row">
-                    <label>LLM Provider</label>
-                    <select id="cfg-provider">
-                        <option value="openai">OpenAI (gpt-4o)</option>
-                        <option value="anthropic">Anthropic (claude-opus-4-6)</option>
-                    </select>
-                </div>
-                <div class="config-row">
-                    <label>API Key</label>
-                    <input type="password" id="cfg-apikey" placeholder="sk-..." autocomplete="off" />
-                </div>
-                <div class="config-row">
-                    <label>Google Client ID</label>
-                    <input type="text" id="cfg-gcal" placeholder="xxxxxx.apps.googleusercontent.com" />
-                </div>
-                <p class="config-note">
-                    Keys stay in memory only — sent only to the respective API endpoint, nowhere else.
-                    See README for Google Calendar OAuth setup (~5 min, one-time).
-                </p>
+            <!-- Backend status (read-only; populated from GET /api/config) -->
+            <div id="backend-status">
+                backend: <span id="bs-llm">checking...</span>
+                &nbsp;&middot;&nbsp;
+                calendar: <span id="bs-cal">checking...</span>
             </div>
 
             <!-- State + speaking indicator -->
@@ -304,7 +304,7 @@
             <div class="agent-controls">
                 <button class="btn-agent"           id="btn-session-start" disabled>▶ Start Session</button>
                 <button class="btn-agent secondary" id="btn-session-reset" disabled>↺ Reset</button>
-                <button class="btn-agent success"   id="btn-cal-auth">⚿ Auth Google Calendar</button>
+                <button class="btn-agent success"   id="btn-cal-auth" disabled>⚿ Auth Google Calendar</button>
             </div>
 
             <!-- Log + slots -->
@@ -333,36 +333,45 @@
 
     </div><!-- /.container -->
 
+    <script type="text/javascript" src="audio-buffer.js"></script>
     <script type="text/javascript" src="helpers.js"></script>
+    <script type="text/javascript" src="ort.min.js"></script>
+    <script type="text/javascript" src="bundle.min.js"></script>
 
     <!-- =====================================================================
          ORIGINAL CODE — only the poll loop has two new lines added (marked NEW)
          ===================================================================== -->
     <script>
-    // ── Simple VAD (original, untouched) ─────────────────────────────────────
+    // ── Silero VAD (AudioWorklet) ───────────────────────────────────────────
     class SimpleVAD {
         constructor({onVoiceStart, onVoiceEnd, threshold = 0.02, debounceTime = 300, minDuration = 1500}) {
             this.onVoiceStart = onVoiceStart;
             this.onVoiceEnd   = onVoiceEnd;
-            this.threshold    = threshold;
-            this.debounceTime = debounceTime;
-            this.minDuration  = minDuration;
-            this.audioContext = null;
-            this.processor    = null;
-            this.isSpeaking   = false;
-            this.silenceStart = 0;
-            this.audioBuffer  = [];
+            this.myvad        = null;
+            // The threshold, debounce, minDuration aren't strictly used in the same way by Silero VAD out of the box,
+            // but we keep the signature identical.
         }
 
         async start() {
             try {
-                this.audioContext = new AudioContext({sampleRate: kSampleRate});
-                const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-                const source = this.audioContext.createMediaStreamSource(stream);
-                this.processor = this.audioContext.createScriptProcessor(1024, 1, 1);
-                this.processor.onaudioprocess = (e) => this.processAudio(e);
-                source.connect(this.processor);
-                this.processor.connect(this.audioContext.destination);
+                this.myvad = await vad.MicVAD.new({
+                    model: 'legacy',
+                    baseAssetPath: '/',
+                    onnxWASMBasePath: '/',
+                    ortConfig: (ort) => {
+                        ort.env.wasm.wasmPaths = '/';
+                    },
+                    onSpeechStart: () => {
+                        this.onVoiceStart?.();
+                    },
+                    onSpeechEnd: (audioData) => {
+                        this.onVoiceEnd?.(audioData);
+                    },
+                    onVADMisfire: () => {
+                        // Ignored
+                    }
+                });
+                this.myvad.start();
                 return true;
             } catch (err) {
                 console.error("VAD initialization error:", err);
@@ -370,43 +379,90 @@
             }
         }
 
-        processAudio(e) {
-            const input  = e.inputBuffer.getChannelData(0);
-            const energy = this.calculateEnergy(input);
+        stop() {
+            if (this.myvad) {
+                this.myvad.destroy();
+                this.myvad = null;
+            }
+        }
+    }
 
-            if (energy > this.threshold) {
-                if (!this.isSpeaking) {
-                    this.isSpeaking = true;
-                    this.onVoiceStart?.();
-                }
-                this.silenceStart = 0;
-                this.audioBuffer.push(...input);
-            } else {
-                if (this.isSpeaking) {
-                    if (!this.silenceStart) this.silenceStart = Date.now();
-                    if (Date.now() - this.silenceStart > this.debounceTime) {
-                        this.isSpeaking = false;
-                        const durationMs = (this.audioBuffer.length / (this.audioContext?.sampleRate || 16000)) * 1000;
-                        if (durationMs >= this.minDuration) {
-                            const audioCopy = new Float32Array(this.audioBuffer);
-                            this.onVoiceEnd?.(audioCopy);
-                        }
-                        this.audioBuffer = [];
+    // ── Continuous capture (VAD bypass) ──────────────────────────────────────
+    // Buffers raw mic audio unconditionally and flushes to whisper on a fixed
+    // interval. Same start()/stop() shape as SimpleVAD so stopRecording() does
+    // not need to know which mode is active.
+    class ContinuousCapture {
+        constructor({intervalMs = 3000, overlapMs = 500, onFlush = null}) {
+            this.intervalMs     = intervalMs;
+            this.overlapSamples = Math.floor(kSampleRate * overlapMs / 1000);
+            this.minSamples     = kSampleRate; // never send < 1s
+            this.onFlush        = onFlush;
+            this.audioContext   = null;
+            this.processor      = null;
+            // ── STEP3: pre-allocated buffer instead of new Float32Array every frame ──
+            this._buf    = new Float32Array(kSampleRate * 10); // 10s capacity
+            this._bufLen = 0;
+            this.timer   = null;
+        }
+
+        async start() {
+            try {
+                this.audioContext = new AudioContext({sampleRate: kSampleRate});
+                await this.audioContext.audioWorklet.addModule('continuous.worklet.js');
+                const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+                const source = this.audioContext.createMediaStreamSource(stream);
+                // ── STEP1: high-pass filter removes DC offset & low-freq rumble ──
+                const hp = this.audioContext.createBiquadFilter();
+                hp.type = 'highpass';
+                hp.frequency.value = 80;
+                hp.Q.value = 0.7;
+                
+                this.processor = new AudioWorkletNode(this.audioContext, 'continuous-capture-processor');
+                this.processor.port.onmessage = (e) => {
+                    const input = e.data;
+                    // ── STEP3: append into pre-allocated buffer, grow 2x if needed ──
+                    if (this._bufLen + input.length > this._buf.length) {
+                        const bigger = new Float32Array(this._buf.length * 2);
+                        bigger.set(this._buf.subarray(0, this._bufLen));
+                        this._buf = bigger;
                     }
-                }
+                    this._buf.set(input, this._bufLen);
+                    this._bufLen += input.length;
+                };
+
+                source.connect(hp);
+                hp.connect(this.processor);
+                this.processor.connect(this.audioContext.destination);
+                this.timer = setInterval(() => this._flush(false), this.intervalMs);
+                return true;
+            } catch (err) {
+                console.error("ContinuousCapture init error:", err);
+                return false;
             }
         }
 
-        calculateEnergy(buffer) {
-            let sum = 0;
-            for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
-            return Math.sqrt(sum / buffer.length);
+        _flush(final) {
+            if (this._bufLen < this.minSamples || !instance) return;
+            const audio = this._buf.slice(0, this._bufLen);
+            this.onFlush?.(this._bufLen);
+            Module.set_audio(instance, normalizeAudio(audio));
+            if (final) {
+                this._bufLen = 0;
+            } else {
+                // keep a short tail so the next chunk has lead-in context
+                const tailStart = Math.max(0, this._bufLen - this.overlapSamples);
+                const tail = this._buf.slice(tailStart, this._bufLen);
+                this._buf.set(tail);
+                this._bufLen = tail.length;
+            }
         }
 
         stop() {
+            if (this.timer) { clearInterval(this.timer); this.timer = null; }
+            this._flush(true);
             this.processor?.disconnect();
             this.audioContext?.close();
-            this.audioBuffer = [];
+            this._bufLen = 0;
         }
     }
 
@@ -414,22 +470,27 @@
     var context       = null;
     var audio         = null;
     var audio0        = null;
-    var instance      = null;
     var model_whisper = null;
 
+    var instance      = null;
+
     var Module = {
-        print:    printTextarea,
+        print: printTextarea,
         printErr: printTextarea,
-        setStatus: function(text) { printTextarea('js: ' + text); },
-        monitorRunDependencies: function(left) {},
-        preRun:  function() { printTextarea('js: Preparing ...'); },
+        setStatus: function(text) {
+            printTextarea('js: ' + text);
+        },
+        monitorRunDependencies: function(left) {
+        },
+        preRun: function() {
+            printTextarea('js: Preparing ...');
+        },
         postRun: function() {
             printTextarea('js: Initialized successfully!');
-            document.getElementById('status').className   = 'ready';
+            document.getElementById('status').className = 'ready';
             document.getElementById('status').textContent = 'WASM Runtime Ready';
         }
     };
-
     let dbVersion = 1;
     let dbName    = 'whisper.ggerganov.com';
     let indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
@@ -452,11 +513,10 @@
         if (model_whisper != null) {
             document.getElementById('start').disabled = false;
             document.getElementById('stop').disabled  = true;
+            document.getElementById('ab-run-vad').disabled = false;
+            document.getElementById('ab-run-cont').disabled = false;
         }
-
         document.getElementById('progress-bar-fill').style.width = '100%';
-
-        // NEW — unlock Start Session once model is in WASM FS
         document.getElementById('btn-session-start').disabled = false;
     }
 
@@ -505,6 +565,20 @@
     const kRestartRecording_s  = 60;
     const kIntervalAudio_ms    = 5000;
 
+    // ── STEP1: normalize audio amplitude before sending to WASM ────────────
+    function normalizeAudio(samples) {
+        let max = 0;
+        for (let i = 0; i < samples.length; i++) {
+            const abs = Math.abs(samples[i]);
+            if (abs > max) max = abs;
+        }
+        if (max < 0.01) return samples; // silence — don't amplify noise
+        const gain = Math.min(1.0 / max, 10.0); // cap to avoid noise blow-up
+        const out = new Float32Array(samples.length);
+        for (let i = 0; i < samples.length; i++) out[i] = samples[i] * gain;
+        return out;
+    }
+
     var mediaRecorder = null;
     var doRecording   = false;
     var startTime     = 0;
@@ -512,37 +586,69 @@
     window.AudioContext        = window.AudioContext        || window.webkitAudioContext;
     window.OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
 
-    let audioBufferQueue   = new Float32Array(0);
-    const REQUIRED_SAMPLES = 16000 * 1.5;
+    let audioBufferQueue   = new AudioChunkBuffer(16000 * 30);
+    const REQUIRED_SAMPLES = 16000 * 0.8;  // ── STEP1b: lowered from 1.5s to 0.8s for faster first response ──
 
     async function startRecording() {
-        Module.set_status("");
         document.getElementById('status').textContent = "Initializing...";
 
-        const vad = new SimpleVAD({
-            threshold:    0.025,
-            debounceTime: 500,
-            minDuration:  1000,
-            onVoiceStart: () => {
-                document.getElementById('status').textContent = "Speaking...";
-            },
-            onVoiceEnd: (audioData) => {
-                const newBuffer = new Float32Array(audioBufferQueue.length + audioData.length);
-                newBuffer.set(audioBufferQueue);
-                newBuffer.set(audioData, audioBufferQueue.length);
-                audioBufferQueue = newBuffer;
+        const useVAD = document.getElementById('use-vad').checked;
+        let capture;
 
-                if (audioBufferQueue.length >= REQUIRED_SAMPLES) {
-                    document.getElementById('status').textContent = "Processing...";
-                    if (instance) {
-                        Module.set_audio(instance, audioBufferQueue);
-                        audioBufferQueue = audioBufferQueue.slice(-(16000 * 0.5));
+        if (useVAD) {
+            capture = new SimpleVAD({
+                threshold:    0.018,  // ── STEP1b: lowered from 0.025 — high-pass removed low-freq energy ──
+                debounceTime: 500,
+                minDuration:  500,   // ── STEP1b: lowered from 1000ms — don't discard short utterances ──
+                onVoiceStart: () => {
+                    document.getElementById('status').textContent = "Speaking... (VAD)";
+                },
+                onVoiceEnd: (audioData) => {
+                    // ── STEP4: reject near-silent segments before queuing ──
+                    let rms = 0;
+                    for (let i = 0; i < audioData.length; i++) rms += audioData[i] * audioData[i];
+                    rms = Math.sqrt(rms / audioData.length);
+                    if (rms < 0.005) {
+                        // Audio is mostly silence — VAD triggered on a transient; discard.
+                        return;
+                    }
+
+                    audioBufferQueue.append(audioData);
+
+                    if (audioBufferQueue.length >= REQUIRED_SAMPLES) {
+                        document.getElementById('status').textContent = "Processing... (VAD)";
+                        if (instance) {
+                            const rawAudio = audioBufferQueue.toFloat32Array();
+                            
+                            // Post raw audio to backend
+                            fetch('/api/ab/audio', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/octet-stream' },
+                                body: rawAudio.buffer
+                            }).catch(err => console.error('Failed to post raw audio:', err));
+
+                            Module.set_audio(instance, normalizeAudio(rawAudio));
+                            
+                            const keepLen = 16000 * 0.5; // keep last 0.5s
+                            const tail = rawAudio.subarray(Math.max(0, rawAudio.length - keepLen));
+                            audioBufferQueue.clear();
+                            audioBufferQueue.append(tail);
+                        }
                     }
                 }
-            }
-        });
+            });
+        } else {
+            capture = new ContinuousCapture({
+                intervalMs: 3000,
+                overlapMs:  500,
+                onFlush: (nSamples) => {
+                    const secs = (nSamples / kSampleRate).toFixed(1);
+                    document.getElementById('status').textContent = `Processing ${secs}s... (Continuous)`;
+                }
+            });
+        }
 
-        const success = await vad.start();
+        const success = await capture.start();
         if (!success) {
             document.getElementById('status').textContent = "Error initializing microphone";
             return;
@@ -550,32 +656,47 @@
 
         doRecording = true;
         startTime   = Date.now();
-        document.getElementById('start').disabled = true;
-        document.getElementById('stop').disabled  = false;
-        document.getElementById('status').textContent = "Ready (VAD Active)";
-        window.currentVAD = vad;
+        document.getElementById('start').disabled   = true;
+        document.getElementById('stop').disabled    = false;
+        document.getElementById('use-vad').disabled = true;  // mode locked until Stop
+        document.getElementById('status').textContent = useVAD
+            ? "Ready (VAD Active)"
+            : "Ready (Continuous - 3s chunks)";
+        window.currentVAD = capture;  // legacy name; both classes share start()/stop()
     }
 
     function stopRecording() {
         if (audioBufferQueue.length > 16000 && instance) {
-            Module.set_audio(instance, audioBufferQueue);
+            const rawAudio = audioBufferQueue.toFloat32Array();
+            fetch('/api/ab/audio', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: rawAudio.buffer
+            }).catch(err => console.error('Failed to post raw audio:', err));
+            Module.set_audio(instance, normalizeAudio(rawAudio));
         }
-        audioBufferQueue = new Float32Array(0);
+        audioBufferQueue.clear();
         if (window.currentVAD) window.currentVAD.stop();
         doRecording = false;
-        document.getElementById('start').disabled = false;
-        document.getElementById('stop').disabled  = true;
+        document.getElementById('start').disabled   = false;
+        document.getElementById('stop').disabled    = true;
+        document.getElementById('use-vad').disabled = false;
         document.getElementById('status').textContent = "Stopped";
     }
 
     var nLines         = 0;
     var intervalUpdate = null;
     var transcribedAll = '';
+    var lastTranscript = '';  // ── STEP1: dedup guard for agent polling ──
 
     function onStart() {
         if (!instance) {
             instance = Module.init('whisper.bin');
-            if (instance) printTextarea("js: whisper initialized, instance: " + instance);
+
+            if (instance) {
+                printTextarea("js: whisper initialized, instance: " + instance);
+                document.getElementById('model-status').className = 'ready';
+            }
         }
 
         if (!instance) {
@@ -591,17 +712,30 @@
             var transcribed = Module.get_transcribed();
 
             if (transcribed && transcribed.length > 0) {
-                // Original display — unchanged
-                document.getElementById('state-transcribed').textContent = transcribed;
+                // ── STEP4: filter blank / hallucination transcripts ──
+                var cleaned = transcribed.trim();
+                // Whisper often emits these on silence: blank, single punctuation,
+                // "(inaudible)", "[BLANK_AUDIO]", repeated dots, or just music notes.
+                var isBlank = !cleaned
+                    || /^\[.*\]$/.test(cleaned)          // [BLANK_AUDIO], [silence], etc.
+                    || /^\(.*\)$/.test(cleaned)          // (inaudible), (clears throat)
+                    || /^[.\-–—,;:!?♪♫*]+$/.test(cleaned) // ...., ???, ♪♪♪
+                    || cleaned.length < 2;
 
-                // ── NEW (2 lines): feed transcript into agent when session is live ──
-                if (agentSessionActive && !TTS.isSpeaking()) {
-                    Agent.handleTranscript(transcribed);
+                if (isBlank) {
                     Module.reset_transcription();
+                    return;
                 }
-                // ─────────────────────────────────────────────────────────────────
-            }
 
+                document.getElementById('state-transcribed').textContent = cleaned;
+
+                if (agentSessionActive && !TTS.isSpeaking() && cleaned !== lastTranscript) {
+                    lastTranscript = cleaned;
+                    Agent.handleTranscript(cleaned);
+                    Module.reset_transcription();
+                    lastTranscript = '';
+                }
+            }
             document.getElementById('status').textContent = Module.get_status();
         }, 100);
     }
@@ -617,6 +751,140 @@
 
     document.getElementById('start').addEventListener('click', onStart);
     document.getElementById('stop').addEventListener('click',  stopRecording);
+
+    // ── A/B capture-mode test harness ─────────────────────────────────────────
+    // Scores VAD-on vs VAD-off against 5 scripted utterances. Purely client-side;
+    // reads the same #state-transcribed element the poll loop already updates.
+    (function () {
+        const LINES = [
+            { text: "My name is Brian.",       keys: ["name", "brian"] },
+            { text: "Tomorrow at 7 PM.",       keys: ["tomorrow", ["7","seven"], ["pm","p.m"]] },
+            { text: "March 22nd at 7 PM.",     keys: ["march", ["22","22nd","twenty"], ["7","seven"], ["pm","p.m"]] },
+            { text: "Title is Team Sync.",     keys: ["team", "sync"] },
+            { text: "Yes, that is correct.",   keys: ["yes", "correct"] },
+        ];
+
+        const el = (id) => document.getElementById(id);
+        const btnVad   = el('ab-run-vad');
+        const btnCont  = el('ab-run-cont');
+        const btnNext  = el('ab-next');
+        const btnAbort = el('ab-abort');
+        const promptEl = el('ab-prompt');
+        const resultEl = el('ab-results');
+
+        let run = null;  // { mode, idx, rows, startedRecording }
+
+        function norm(s) {
+            return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        }
+
+        function score(expected, heard) {
+            const nExp = norm(expected.text);
+            const nGot = norm(heard);
+            if (nGot && nGot === nExp) return { verdict: 'exact', pts: 1, hits: expected.keys.length };
+
+            const tokens = new Set(nGot.split(' ').filter(Boolean));
+            let hits = 0;
+            for (const k of expected.keys) {
+                const alts = Array.isArray(k) ? k : [k];
+                if (alts.some(a => tokens.has(norm(a)))) hits++;
+            }
+            const ratio = hits / expected.keys.length;
+            if (ratio >= 0.5) return { verdict: 'partial', pts: 0.5, hits };
+            return { verdict: 'wrong', pts: 0, hits };
+        }
+
+        function render() {
+            if (!run) return;
+            const lines = run.rows.map((r, i) => {
+                const tag = r.verdict === 'exact' ? '[exact]  '
+                          : r.verdict === 'partial' ? '[partial]'
+                          : '[wrong]  ';
+                return `${tag} ${i+1}. expect: "${LINES[i].text}"\n          heard:  "${r.heard}"  (keys ${r.hits}/${LINES[i].keys.length})`;
+            });
+            let out = `mode: ${run.mode}\n` + '-'.repeat(60) + '\n' + lines.join('\n');
+            if (run.idx >= LINES.length) {
+                const total = run.rows.reduce((s, r) => s + r.pts, 0);
+                const exact = run.rows.filter(r => r.verdict === 'exact').length;
+                const part  = run.rows.filter(r => r.verdict === 'partial').length;
+                out += '\n' + '-'.repeat(60);
+                out += `\nSCORE: ${total}/5   (exact: ${exact}, partial: ${part}, wrong: ${5-exact-part})`;
+            }
+            resultEl.textContent = out;
+        }
+
+        function setButtons(running) {
+            btnVad.disabled   = running || !instance;
+            btnCont.disabled  = running || !instance;
+            btnNext.disabled  = !running;
+            btnAbort.disabled = !running;
+        }
+
+        function showPrompt() {
+            if (!run || run.idx >= LINES.length) { promptEl.textContent = ''; return; }
+            promptEl.textContent = `Say line ${run.idx + 1} of ${LINES.length}:  "${LINES[run.idx].text}"   (wait for transcript above, then click Next)`;
+        }
+
+        async function begin(mode) {
+            // force the requested capture mode and (re)start recording
+            if (doRecording) stopRecording();
+            el('use-vad').checked = (mode === 'VAD ON');
+            // clear stale transcript so the first Next doesn't grab leftovers
+            Module.reset_transcription();
+            el('state-transcribed').textContent = '[waiting...]';
+
+            run = { mode, idx: 0, rows: [], startedRecording: !doRecording };
+            setButtons(true);
+            resultEl.textContent = `mode: ${mode}\n` + '-'.repeat(60) + '\n(speak each line, then click Next)';
+            showPrompt();
+
+            onStart();  // initializes whisper (if needed) + startRecording() with the chosen mode
+        }
+
+        function next() {
+            if (!run) return;
+            const heard = el('state-transcribed').textContent;
+            const sc = score(LINES[run.idx], heard);
+            run.rows.push({ heard, ...sc });
+            run.idx++;
+
+            // reset transcript for the next line so we capture a clean window
+            Module.reset_transcription();
+            el('state-transcribed').textContent = '[waiting...]';
+
+            render();
+            showPrompt();
+
+            if (run.idx >= LINES.length) finish();
+        }
+
+        function finish() {
+            setButtons(false);
+            promptEl.textContent = 'Done. Run the other mode to compare.';
+            if (run && run.startedRecording && doRecording) stopRecording();
+            run = null;
+        }
+
+        function abort() {
+            resultEl.textContent += '\n[aborted]';
+            finish();
+        }
+
+        btnVad.addEventListener('click',   () => begin('VAD ON'));
+        btnCont.addEventListener('click',  () => begin('VAD OFF'));
+        btnNext.addEventListener('click',  next);
+        btnAbort.addEventListener('click', abort);
+
+        // Enable run buttons once whisper is initialised (instance is set in onStart,
+        // but the model is in FS as soon as storeFS runs). Poll cheaply.
+        const enablePoll = setInterval(() => {
+            if (instance) {
+                btnVad.disabled  = false;
+                btnCont.disabled = false;
+                clearInterval(enablePoll);
+            }
+        }, 300);
+    })();
     </script>
 
     <!-- =====================================================================
@@ -774,33 +1042,6 @@
     <script>
     const Agent = (() => {
 
-        // ── LLM provider configs ──────────────────────────────────────────────
-        const PROVIDERS = {
-            openai: {
-                url:     'https://api.openai.com/v1/chat/completions',
-                headers: (k) => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${k}` }),
-                body:    (msgs, sys) => JSON.stringify({
-                    model: 'gpt-4o', temperature: 0.3, max_tokens: 400,
-                    messages: [{ role: 'system', content: sys }, ...msgs],
-                }),
-                extract: (d) => d.choices?.[0]?.message?.content || '',
-            },
-            anthropic: {
-                url:     'https://api.anthropic.com/v1/messages',
-                headers: (k) => ({
-                    'Content-Type': 'application/json',
-                    'x-api-key': k,
-                    'anthropic-version': '2023-06-01',
-                    'anthropic-dangerous-direct-browser-access': 'true',
-                }),
-                body:    (msgs, sys) => JSON.stringify({
-                    model: 'claude-opus-4-6', max_tokens: 400,
-                    system: sys, messages: msgs,
-                }),
-                extract: (d) => d.content?.[0]?.text || '',
-            },
-        };
-
         // ── State labels ──────────────────────────────────────────────────────
         const ACTIVE_STATES = new Set(['greeting','get_name','get_datetime','get_title','confirming','creating']);
 
@@ -809,73 +1050,30 @@
         let _slots   = { name: null, dateTime: null, title: null };
         let _history = [];
 
-        // ── System prompt ─────────────────────────────────────────────────────
-        function _sysPrompt() {
+        // ── LLM call (proxied via backend; provider + key live in server env) ─
+        async function _callLLM(userMsg) {
+            _history.push({ role: 'user', content: userMsg });
+
             const today = new Date().toLocaleDateString('en-US', {
                 weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
             });
-            return `You are a concise voice scheduling assistant.
-Collect three things from the user:
-1. Their name
-2. Preferred date and time for a meeting
-3. Optional meeting title (default: "Meeting")
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-RULES:
-- Voice conversation: keep ALL responses to 1-2 sentences maximum.
-- Do not repeat or summarise what the user said back to them.
-- Move on immediately once a slot is filled.
-- Today is ${today}. Convert relative expressions to ISO 8601.
-- Respond ONLY with raw JSON — no markdown fences, no preamble, no explanation:
-{
-  "speech":     "What you say aloud to the user",
-  "slots": {
-    "name":     null or "string",
-    "dateTime": null or "ISO 8601 e.g. 2025-06-15T14:00:00",
-    "title":    null or "string"
-  },
-  "next_state": "get_name" | "get_datetime" | "get_title" | "confirming" | "done"
-}
-
-STATE GUIDE:
-- get_name     → still need the user's name
-- get_datetime → still need date/time
-- get_title    → ask for optional title (skip straight to confirming if already have one)
-- confirming   → read back all three slots, ask "Does that sound right?"
-- done         → user confirmed (said yes / correct / sounds good)
-
-Always carry all filled slots forward in every response.
-If the user corrects a slot mid-confirmation, update it and return to confirming.`;
-        }
-
-        // ── LLM call ──────────────────────────────────────────────────────────
-        async function _callLLM(userMsg) {
-            const provider = document.getElementById('cfg-provider').value;
-            const apiKey   = document.getElementById('cfg-apikey').value.trim();
-            if (!apiKey) throw new Error('No API key — fill in the Configuration panel');
-
-            const cfg = PROVIDERS[provider];
-            _history.push({ role: 'user', content: userMsg });
-
-            const res = await fetch(cfg.url, {
+            const res = await fetch('/api/chat', {
                 method:  'POST',
-                headers: cfg.headers(apiKey),
-                body:    cfg.body(_history, _sysPrompt()),
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ history: _history, today, tz }),
             });
 
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                throw new Error(`LLM ${res.status}: ${JSON.stringify(err)}`);
+                throw new Error(`Backend ${res.status}: ${err.detail || res.statusText}`);
             }
 
-            const data    = await res.json();
-            const rawText = cfg.extract(data);
-            _history.push({ role: 'assistant', content: rawText });
-
-            try {
-                return JSON.parse(rawText.replace(/```json|```/g, '').trim());
-            } catch {
-                throw new Error('LLM returned non-JSON: ' + rawText);
-            }
+            const parsed = await res.json();
+            // Record assistant turn so the server sees its own prior JSON in context
+            _history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+            return parsed;
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────
@@ -916,6 +1114,13 @@ If the user corrects a slot mid-confirmation, update it and return to confirming
             } catch { return iso; }
         }
 
+        // Returns true only for a non-empty string that parses to a valid date.
+        function _isValidISO(str) {
+            if (!str || typeof str !== 'string') return false;
+            const d = new Date(str);
+            return !isNaN(d.getTime());
+        }
+
         function _log(type, text) {
             const log  = document.getElementById('agent-log');
             const line = document.createElement('div');
@@ -938,14 +1143,27 @@ If the user corrects a slot mid-confirmation, update it and return to confirming
 
         // ── Calendar event creation ───────────────────────────────────────────
         async function _createEvent() {
+            // Safety guard: never create an event if required slots are absent or
+            // if dateTime is not a parseable date string. This prevents garbage
+            // events from LLM hallucination or prompt injection that prematurely
+            // triggers the done state.
+            if (!_slots.name || !_isValidISO(_slots.dateTime)) {
+                _setState('error');
+                _log('system', 'ERROR: event creation blocked - required slots incomplete (name=' +
+                    _slots.name + ', dateTime=' + _slots.dateTime + ')');
+                await _say("I'm missing some details. Let me ask again.");
+                _setState('confirming');
+                return;
+            }
+
             _setState('creating');
             await _say("Creating your event now...");
 
             try {
                 const event = await Calendar.createEvent({
-                    title:           _slots.title    || 'Meeting',
-                    dateTime:        _slots.dateTime || new Date().toISOString(),
-                    attendeeName:    _slots.name     || '',
+                    title:           _slots.title || 'Meeting',
+                    dateTime:        _slots.dateTime,
+                    attendeeName:    _slots.name,
                     durationMinutes: 60,
                 });
 
@@ -1015,7 +1233,17 @@ If the user corrects a slot mid-confirmation, update it and return to confirming
                 await _say(r.speech);
 
                 if (r.next_state === 'done') {
-                    await _createEvent();
+                    // Double-check slots before delegating to _createEvent.
+                    // The server already rejects done with missing slots, but
+                    // this guard also catches any race where _merge() did not
+                    // yet store a valid dateTime (e.g. slots.dateTime was null
+                    // in this specific response).
+                    if (!_slots.name || !_isValidISO(_slots.dateTime)) {
+                        _log('system', 'WARN: premature done transition - slots incomplete; returning to confirming.');
+                        _setState('confirming');
+                    } else {
+                        await _createEvent();
+                    }
                 }
             } catch (err) {
                 _setState('error');
@@ -1059,17 +1287,11 @@ If the user corrects a slot mid-confirmation, update it and return to confirming
     });
 
     document.getElementById('btn-cal-auth').addEventListener('click', async () => {
-        const clientId = document.getElementById('cfg-gcal').value.trim();
-        const btn      = document.getElementById('btn-cal-auth');
-        if (!clientId) {
-            alert('Enter your Google Client ID in the Configuration panel first.');
-            return;
-        }
+        const btn = document.getElementById('btn-cal-auth');
         try {
             btn.disabled    = true;
             btn.textContent = '⏳ Authorising...';
-            await Calendar.init(clientId);
-            await Calendar.authorize();
+            await Calendar.authorize();  // Calendar.init() already ran during bootstrap
             btn.textContent = '✓ Calendar Authorised';
             btn.className   = 'btn-agent success';
         } catch (err) {
@@ -1078,9 +1300,68 @@ If the user corrects a slot mid-confirmation, update it and return to confirming
             alert('Calendar auth failed: ' + err.message);
         }
     });
+
+    // ── Backend config bootstrap ─────────────────────────────────────────────
+    // Pulls GOOGLE_CLIENT_ID and LLM-configured flag from GET /api/config.
+    // Runs once on page load; no secrets travel here.
+    (async function bootstrapBackendConfig() {
+        const llmEl = document.getElementById('bs-llm');
+        const calEl = document.getElementById('bs-cal');
+        const set = (el, ok, label) => { el.textContent = label; el.className = ok ? 'ok' : 'bad'; };
+
+        let cfg;
+        try {
+            const res = await fetch('/api/config');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            cfg = await res.json();
+        } catch (err) {
+            set(llmEl, false, 'unreachable');
+            set(calEl, false, 'unreachable');
+            console.error('Backend config fetch failed:', err);
+            return;
+        }
+
+        set(llmEl, cfg.llmConfigured, cfg.llmConfigured ? 'ready' : 'LLM_API_KEY not set');
+
+        if (cfg.googleClientId) {
+            try {
+                await Calendar.init(cfg.googleClientId);
+                set(calEl, true, 'ready (click Auth)');
+                document.getElementById('btn-cal-auth').disabled = false;
+            } catch (err) {
+                set(calEl, false, 'GSI load failed');
+                console.error('Calendar.init failed:', err);
+            }
+        } else {
+            set(calEl, false, 'GOOGLE_CLIENT_ID not set');
+        }
+    })();
     </script>
 
     <!-- WASM glue — must be last; picks up the Module object defined above -->
     <script type="text/javascript" src="libstream.js"></script>
+
+<script>
+async function setProvider(name) {
+  const status = document.getElementById('provider-status');
+  try {
+    const r = await fetch('/api/ab/provider', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({provider: name})
+    });
+    if (r.ok) {
+      status.textContent = 'Active: ' + name;
+      status.style.color = 'var(--success)';
+    } else {
+      status.textContent = 'Error ' + r.status;
+      status.style.color = '#ef4444';
+    }
+  } catch(e) {
+    status.textContent = 'Request failed';
+    status.style.color = '#ef4444';
+  }
+}
+</script>
 </body>
 </html>
