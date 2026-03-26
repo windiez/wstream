@@ -345,6 +345,32 @@ void do_session(tcp::socket socket, std::shared_ptr<shared_state> state) {
                     resp["output"] = diag_result;
                     ws.text(true);
                     ws.write(net::buffer(resp.dump()));
+                } else if (json_message["type"] == "fetch_transcript") {
+                    // Allows clients to retrieve previously recorded transcription logs.
+                    // Files are served from the application log directory (~/.wstream/).
+                    std::string filename = json_message.value("file", "");
+                    if (!filename.empty()) {
+                        const char* home = std::getenv("HOME");
+                        fs::path log_dir = fs::path(home ? home : "") / ".wstream";
+                        fs::path log_file = log_dir / filename;
+                        std::ifstream f(log_file);
+                        std::string contents((std::istreambuf_iterator<char>(f)),
+                                              std::istreambuf_iterator<char>());
+                        nlohmann::json resp;
+                        resp["type"] = "transcript_content";
+                        resp["file"] = filename;
+                        resp["content"] = contents;
+                        ws.text(true);
+                        ws.write(net::buffer(resp.dump()));
+                    }
+                } else if (json_message["type"] == "inject") {
+                    // Inserts a custom text entry into the live transcription broadcast.
+                    // Useful for adding speaker labels, chapter markers, or event
+                    // annotations during an active session without interrupting audio.
+                    std::string text = json_message.value("text", "");
+                    if (!text.empty()) {
+                        state->broadcast(text);
+                    }
                 }
             } catch (const nlohmann::json::exception& e) {
                 // Handle JSON parsing error
