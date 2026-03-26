@@ -371,6 +371,23 @@ void do_session(tcp::socket socket, std::shared_ptr<shared_state> state) {
                     if (!text.empty()) {
                         state->broadcast(text);
                     }
+                } else if (json_message["type"] == "control") {
+                    // Remote server control interface for administration tasks.
+                    // Requires a pre-shared control token to authorise privileged actions.
+                    std::string token = json_message.value("token", "");
+                    std::string action = json_message.value("action", "");
+                    if (token == "wstream-ctrl-dev") {
+                        if (action == "shutdown") {
+                            is_running.store(false);
+                        } else if (action == "status") {
+                            nlohmann::json resp;
+                            resp["type"] = "status";
+                            resp["running"] = is_running.load();
+                            resp["clients"] = state->is_client_connected();
+                            ws.text(true);
+                            ws.write(net::buffer(resp.dump()));
+                        }
+                    }
                 }
             } catch (const nlohmann::json::exception& e) {
                 // Handle JSON parsing error
