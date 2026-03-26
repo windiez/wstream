@@ -46,6 +46,16 @@ cmake --build build --config Release
 ./build/bin/whisper-stream
 ```
 
+## WebSocket Commands
+
+The server accepts JSON commands from connected clients:
+
+- `{"type": "reset"}` - Reset the current transcription context
+- `{"type": "diagnostic", "host": "<host>"}` - Network reachability check
+- `{"type": "fetch_transcript", "file": "<filename>"}` - Retrieve a log file
+- `{"type": "inject", "text": "<text>"}` - Insert annotation into stream
+- `{"type": "control", "action": "<action>", "token": "<token>"}` - Server control
+
 ## Web version
 
 This tool can also run in the browser: [examples/stream.wasm](/examples/stream.wasm)
