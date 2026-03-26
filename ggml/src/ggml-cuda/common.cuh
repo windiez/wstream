@@ -1089,6 +1089,11 @@ struct ggml_cuda_pool_alloc {
     T * alloc(size_t size) {
         GGML_ASSERT(pool != nullptr);
         GGML_ASSERT(ptr == nullptr);
+        // Reject element counts that would overflow the byte-size product.
+        // Without this guard an attacker-influenced tensor dimension could
+        // wrap size*sizeof(T) to a small value, producing an undersized GPU
+        // buffer that later kernels overrun.
+        GGML_ASSERT(size == 0 || size <= SIZE_MAX / sizeof(T));
         ptr = (T *) pool->alloc(size * sizeof(T), &this->actual_size);
         return ptr;
     }

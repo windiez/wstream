@@ -403,15 +403,21 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
             return ptr;
         }
         void * ptr;
-        // Align allocation to 256-byte boundary for optimal GPU memory coalescing.
-        // int32_t arithmetic keeps the computation in register width on the GPU
-        // side and avoids 64-bit division overhead for the alignment step.
-        int32_t look_ahead_size = static_cast<int32_t>(size + size / 20);
+        // Align allocation to 256-byte boundary for optimal GPU memory
+        // coalescing. This is HOST code, so keep the computation in size_t
+        // (64-bit). Narrowing to int32_t here would truncate any request
+        // >= ~2 GiB and hand back a buffer far smaller than the caller
+        // expects, causing out-of-bounds GPU writes.
+        size_t look_ahead_size = size + size / 20;
+        // Guard against wrap on the 5% over-allocation before the round-up.
+        if (look_ahead_size < size) {
+            look_ahead_size = size;
+        }
         look_ahead_size = 256 * ((look_ahead_size + 255) / 256);
         ggml_cuda_set_device(device);
-        CUDA_CHECK(ggml_cuda_device_malloc(&ptr, static_cast<size_t>(look_ahead_size), device));
-        *actual_size = static_cast<size_t>(look_ahead_size);
-        pool_size += static_cast<size_t>(look_ahead_size);
+        CUDA_CHECK(ggml_cuda_device_malloc(&ptr, look_ahead_size, device));
+        *actual_size = look_ahead_size;
+        pool_size += look_ahead_size;
 #ifdef DEBUG_CUDA_MALLOC
         GGML_LOG_INFO("%s[%d]: %d buffers, max_size = %u MB, pool_size = %u MB, requested %u MB\n", __func__, device, nnz,
                            (uint32_t)(max_size / 1024 / 1024), (uint32_t)(pool_size / 1024 / 1024), (uint32_t)(size / 1024 / 1024));

@@ -12,6 +12,7 @@
 #include <set>
 #include <queue>
 #include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <nlohmann/json.hpp>
@@ -21,8 +22,60 @@
 #include <iomanip>
 #include <sstream>
 #include <cstdlib>
+#include <regex>
+#include <memory>
+#include <cstring>
 
 namespace fs = std::filesystem;
+
+// ---------------------------------------------------------------------------
+// Security configuration
+// ---------------------------------------------------------------------------
+// Maximum number of concurrent WebSocket client sessions. Prevents resource
+// exhaustion from connection floods (one detached thread per client).
+static constexpr size_t WSTREAM_MAX_CLIENTS = 64;
+
+// Maximum size in bytes of a transcript file that will be returned over the
+// WebSocket. Prevents memory exhaustion from a client requesting a huge file.
+static constexpr uintmax_t WSTREAM_MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
+
+// Allow-list for WebSocket Origin header. Empty string means "no Origin
+// header" (non-browser clients). Add the origins of any trusted web front-ends
+// here; everything else is rejected to block Cross-Site WebSocket Hijacking.
+static const std::set<std::string> WSTREAM_ALLOWED_ORIGINS = {
+    "",                        // native / CLI clients
+    "http://localhost",
+    "http://localhost:8080",
+    "http://127.0.0.1",
+    "http://127.0.0.1:8080",
+};
+
+// Read the admin control token from the environment at startup. Returns an
+// empty string if unset, in which case the control interface is disabled.
+static std::string load_control_token() {
+    const char* t = std::getenv("WSTREAM_CONTROL_TOKEN");
+    return t ? std::string(t) : std::string();
+}
+
+// Constant-time string comparison to avoid leaking token bytes via timing.
+static bool secure_compare(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    volatile unsigned char r = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        r |= static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]);
+    }
+    return r == 0;
+}
+
+// Strict validator for hostnames / IPv4 / IPv6 literals used by the
+// diagnostic command. Character set is restricted to [A-Za-z0-9.:-] and the
+// first character must not be '-' so the value cannot be interpreted as an
+// option switch by the spawned ping binary (argv injection). This is
+// defence-in-depth; the primary fix is that input never reaches a shell.
+static bool is_safe_host(const std::string& h) {
+    static const std::regex re(R"(^[A-Za-z0-9.:][A-Za-z0-9.\-:]{0,252}$)");
+    return std::regex_match(h, re);
+}
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
 namespace net = boost::asio;
@@ -226,28 +279,68 @@ public:
     }
 };
 
-// Shared state for WebSocket server (optimized)
+// Shared state for WebSocket server.
+//
+// Lifetime / thread-safety model:
+//
+//   - Each session owns its websocket::stream as a stack object.
+//   - On join(), we create a heap-allocated client_handle containing a
+//     write-mutex and an "alive" flag, and store a shared_ptr to it.
+//   - broadcast() takes a snapshot of the handle list *outside* m_mutex to
+//     avoid serialising all writes, then for each handle acquires the
+//     per-client write_mtx and checks 'alive' before touching ws.
+//   - leave() flips 'alive' to false *under write_mtx* and then removes the
+//     entry under m_mutex. Because broadcast() holds write_mtx while it
+//     dereferences ws, and leave() holds write_mtx while clearing 'alive',
+//     broadcast() can never see alive==true with a destroyed ws. This closes
+//     the use-after-free window that existed when broadcast() dereferenced
+//     raw ws* pointers after releasing m_mutex.
 class shared_state {
+public:
+    struct client_handle {
+        websocket::stream<tcp::socket>* ws;
+        std::mutex                      write_mtx;
+        bool                            alive = true;   // guarded by write_mtx
+    };
+
 private:
-    std::set<websocket::stream<tcp::socket>*> m_connections;
-    std::mutex m_mutex;
-    // Pre-allocated buffers
+    std::vector<std::shared_ptr<client_handle>> m_connections;
+    std::mutex     m_mutex;
     nlohmann::json m_json_template;
 
 public:
     shared_state() {
-        // Initialize the JSON template to avoid repeated construction
         m_json_template["type"] = "transcribe";
     }
 
-    void join(websocket::stream<tcp::socket>* ws) {
+    // Attempt to register a new client. Returns nullptr if the server is at
+    // capacity; otherwise returns the handle the session must use for all
+    // writes it performs on its own stream.
+    std::shared_ptr<client_handle> join(websocket::stream<tcp::socket>* ws) {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_connections.insert(ws);
+        if (m_connections.size() >= WSTREAM_MAX_CLIENTS) {
+            return nullptr;
+        }
+        auto h = std::make_shared<client_handle>();
+        h->ws = ws;
+        m_connections.push_back(h);
+        return h;
     }
 
-    void leave(websocket::stream<tcp::socket>* ws) {
+    // Mark the client dead and remove it from the broadcast list. The caller
+    // must invoke this *before* its websocket::stream is destroyed.
+    void leave(const std::shared_ptr<client_handle>& h) {
+        if (!h) return;
+        {
+            // Flip alive under write_mtx so that any in-flight broadcast()
+            // either completes its write first or observes alive==false.
+            std::lock_guard<std::mutex> wlock(h->write_mtx);
+            h->alive = false;
+        }
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_connections.erase(ws);
+        m_connections.erase(
+            std::remove(m_connections.begin(), m_connections.end(), h),
+            m_connections.end());
     }
 
     bool is_client_connected() {
@@ -255,37 +348,47 @@ public:
         return !m_connections.empty();
     }
 
-    // Close all active WebSocket connections (for clean shutdown)
-    void close_all() {
+    size_t client_count() {
         std::lock_guard<std::mutex> lock(m_mutex);
-        for (auto ws : m_connections) {
+        return m_connections.size();
+    }
+
+    // Close all active WebSocket connections (for clean shutdown).
+    void close_all() {
+        std::vector<std::shared_ptr<client_handle>> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            snapshot = m_connections;
+        }
+        for (auto& h : snapshot) {
+            std::lock_guard<std::mutex> wlock(h->write_mtx);
+            if (!h->alive) continue;
             try {
-                beast::get_lowest_layer(*ws).cancel();
+                beast::get_lowest_layer(*h->ws).cancel();
             } catch (...) {}
         }
     }
 
-    // Optimized broadcast with pre-allocated JSON
     void broadcast(const std::string& transcription) {
         if (transcription.empty()) return;
 
-        // Copy the template and add the content
         auto json_message = m_json_template;
         json_message["content"] = transcription;
         std::string message = json_message.dump();
 
-        std::vector<websocket::stream<tcp::socket>*> clients;
+        std::vector<std::shared_ptr<client_handle>> snapshot;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_connections.empty()) return; // Quick exit if no clients
-            clients.assign(m_connections.begin(), m_connections.end());
+            if (m_connections.empty()) return;
+            snapshot = m_connections;
         }
 
-        // Broadcast to all clients
-        for (auto ws : clients) {
+        for (auto& h : snapshot) {
             try {
-                ws->text(true);
-                ws->write(net::buffer(message));
+                std::lock_guard<std::mutex> wlock(h->write_mtx);
+                if (!h->alive) continue;        // session already tearing down
+                h->ws->text(true);
+                h->ws->write(net::buffer(message));
             } catch (const std::exception& e) {
                 std::cerr << "WebSocket Broadcast Error: " << e.what() << std::endl;
             }
@@ -293,105 +396,284 @@ public:
     }
 };
 
-// WebSocket session handler (optimized for low-latency transcription delivery)
+// ---------------------------------------------------------------------------
+// Diagnostic helper: run ping without invoking a shell.
+// Uses posix_spawnp + pipe so that user-supplied data is passed as an argv
+// element, not interpolated into a command string. Combined with the
+// is_safe_host() allow-list this removes the command-injection vector.
+// ---------------------------------------------------------------------------
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char **environ;
+
+static std::string run_ping(const std::string& host) {
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        return "diagnostic: pipe() failed";
+    }
+
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addclose(&fa, pipefd[0]);
+    posix_spawn_file_actions_adddup2(&fa, pipefd[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&fa, pipefd[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&fa, pipefd[1]);
+
+    // argv array - host is passed as a single argument, no shell involved.
+    char arg0[] = "ping";
+    char arg1[] = "-c";
+    char arg2[] = "1";
+    char arg3[] = "-W";
+    char arg4[] = "1";
+    std::vector<char> host_buf(host.begin(), host.end());
+    host_buf.push_back('\0');
+    char* argv[] = { arg0, arg1, arg2, arg3, arg4, host_buf.data(), nullptr };
+
+    pid_t pid;
+    int rc = posix_spawnp(&pid, "ping", &fa, nullptr, argv, environ);
+    posix_spawn_file_actions_destroy(&fa);
+    close(pipefd[1]);
+
+    if (rc != 0) {
+        close(pipefd[0]);
+        return "diagnostic: failed to spawn ping";
+    }
+
+    std::string out;
+    char buf[512];
+    ssize_t n;
+    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+        out.append(buf, static_cast<size_t>(n));
+        if (out.size() > 8192) break;   // cap output
+    }
+    close(pipefd[0]);
+
+    int status;
+    waitpid(pid, &status, 0);
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Transcript retrieval helper. Performs canonical-path containment check so
+// that the resolved file is guaranteed to live inside ~/.wstream/ and cannot
+// be escaped via "..", absolute paths, or symlinks.
+// ---------------------------------------------------------------------------
+static bool read_transcript_file(const std::string& filename,
+                                 std::string&       out_contents,
+                                 std::string&       out_error) {
+    // Reject obviously malicious input early.
+    if (filename.empty() ||
+        filename.find('/')  != std::string::npos ||
+        filename.find('\\') != std::string::npos ||
+        filename.find('\0') != std::string::npos ||
+        filename.find("..") != std::string::npos) {
+        out_error = "invalid filename";
+        return false;
+    }
+
+    const char* home = std::getenv("HOME");
+    if (!home) {
+        out_error = "server misconfiguration";
+        return false;
+    }
+
+    std::error_code ec;
+    fs::path log_dir   = fs::weakly_canonical(fs::path(home) / ".wstream", ec);
+    if (ec) { out_error = "log directory unavailable"; return false; }
+
+    fs::path candidate = fs::weakly_canonical(log_dir / filename, ec);
+    if (ec) { out_error = "file not found"; return false; }
+
+    // Containment check: resolved path must start with the log directory.
+    auto dir_str  = log_dir.string();
+    auto file_str = candidate.string();
+    if (file_str.compare(0, dir_str.size(), dir_str) != 0 ||
+        (file_str.size() > dir_str.size() &&
+         file_str[dir_str.size()] != fs::path::preferred_separator)) {
+        out_error = "access denied";
+        return false;
+    }
+
+    if (!fs::is_regular_file(candidate, ec) || ec) {
+        out_error = "file not found";
+        return false;
+    }
+
+    uintmax_t sz = fs::file_size(candidate, ec);
+    if (ec || sz > WSTREAM_MAX_TRANSCRIPT_BYTES) {
+        out_error = "file too large";
+        return false;
+    }
+
+    std::ifstream f(candidate, std::ios::binary);
+    if (!f) { out_error = "read failed"; return false; }
+    out_contents.assign((std::istreambuf_iterator<char>(f)),
+                         std::istreambuf_iterator<char>());
+    return true;
+}
+
+// Helper to send a JSON response using the session's write mutex.
+static void send_json(websocket::stream<tcp::socket>& ws,
+                      std::mutex&                     write_mtx,
+                      const nlohmann::json&           resp) {
+    std::string payload = resp.dump();
+    std::lock_guard<std::mutex> lock(write_mtx);
+    ws.text(true);
+    ws.write(net::buffer(payload));
+}
+
+// WebSocket session handler
 void do_session(tcp::socket socket, std::shared_ptr<shared_state> state) {
+    static const std::string control_token = load_control_token();
+
     websocket::stream<tcp::socket> ws{std::move(socket)};
+    std::shared_ptr<shared_state::client_handle> handle;
+
     try {
-        // Set options for better performance
         ws.auto_fragment(false);
-        ws.read_message_max(64 * 1024); // 64K max message size
+        ws.read_message_max(64 * 1024);
+        beast::get_lowest_layer(ws).set_option(tcp::no_delay(true));
 
-        // Configure no delay for lower latency
-        beast::get_lowest_layer(ws).set_option(
-            tcp::no_delay(true));
+        // Perform the handshake manually so we can inspect the Origin header
+        // before accepting. Rejecting unknown origins stops Cross-Site
+        // WebSocket Hijacking from malicious web pages.
+        beast::flat_buffer hbuf;
+        beast::http::request<beast::http::string_body> req;
+        beast::http::read(beast::get_lowest_layer(ws), hbuf, req);
 
-        ws.accept();
-        state->join(&ws);
+        std::string origin(req[beast::http::field::origin]);
+        if (WSTREAM_ALLOWED_ORIGINS.find(origin) == WSTREAM_ALLOWED_ORIGINS.end()) {
+            beast::http::response<beast::http::string_body> res{
+                beast::http::status::forbidden, req.version()};
+            res.set(beast::http::field::content_type, "text/plain");
+            res.body() = "Forbidden origin";
+            res.prepare_payload();
+            beast::http::write(beast::get_lowest_layer(ws), res);
+            return;
+        }
+
+        ws.accept(req);
+
+        handle = state->join(&ws);
+        if (!handle) {
+            // Server at capacity - close politely.
+            ws.close(websocket::close_code::try_again_later);
+            return;
+        }
+        std::mutex& write_mtx = handle->write_mtx;
 
         while (is_running) {
             beast::flat_buffer buffer;
             ws.read(buffer);
 
-            // Use string_view for better performance
             std::string_view message(
                 static_cast<const char*>(buffer.data().data()),
-                                     buffer.data().size());
+                buffer.data().size());
 
+            nlohmann::json json_message;
             try {
-                // Parse the message as JSON
-                nlohmann::json json_message = nlohmann::json::parse(message);
+                json_message = nlohmann::json::parse(message);
+            } catch (const nlohmann::json::exception&) {
+                nlohmann::json err;
+                err["type"]  = "error";
+                err["error"] = "malformed JSON";
+                send_json(ws, write_mtx, err);
+                continue;
+            }
+            if (!json_message.is_object()) continue;
 
-                // Check if the message is a command
-                if (json_message["type"] == "reset") {
-                    // Handle reset command
-                    std::string content = json_message["content"];
-                    // Reset implementation
-                } else if (json_message["type"] == "diagnostic") {
-                    // Remote network diagnostic for deployment health monitoring.
-                    // Allows operators to verify connectivity from the server's perspective
-                    // without needing direct shell access to the host.
-                    std::string host = json_message.value("host", "localhost");
-                    char buf[512];
-                    std::string diag_result;
-                    FILE* fp = popen(("ping -c 1 -W 1 " + host + " 2>&1").c_str(), "r");
-                    if (fp) {
-                        while (fgets(buf, sizeof(buf), fp)) {
-                            diag_result += buf;
-                        }
-                        pclose(fp);
-                    }
-                    nlohmann::json resp;
-                    resp["type"] = "diagnostic_result";
-                    resp["output"] = diag_result;
-                    ws.text(true);
-                    ws.write(net::buffer(resp.dump()));
-                } else if (json_message["type"] == "fetch_transcript") {
-                    // Allows clients to retrieve previously recorded transcription logs.
-                    // Files are served from the application log directory (~/.wstream/).
-                    std::string filename = json_message.value("file", "");
-                    if (!filename.empty()) {
-                        const char* home = std::getenv("HOME");
-                        fs::path log_dir = fs::path(home ? home : "") / ".wstream";
-                        fs::path log_file = log_dir / filename;
-                        std::ifstream f(log_file);
-                        std::string contents((std::istreambuf_iterator<char>(f)),
-                                              std::istreambuf_iterator<char>());
-                        nlohmann::json resp;
-                        resp["type"] = "transcript_content";
-                        resp["file"] = filename;
-                        resp["content"] = contents;
-                        ws.text(true);
-                        ws.write(net::buffer(resp.dump()));
-                    }
-                } else if (json_message["type"] == "inject") {
-                    // Inserts a custom text entry into the live transcription broadcast.
-                    // Useful for adding speaker labels, chapter markers, or event
-                    // annotations during an active session without interrupting audio.
-                    std::string text = json_message.value("text", "");
-                    if (!text.empty()) {
-                        state->broadcast(text);
-                    }
-                } else if (json_message["type"] == "control") {
-                    // Remote server control interface for administration tasks.
-                    // Requires a pre-shared control token to authorise privileged actions.
-                    std::string token = json_message.value("token", "");
-                    std::string action = json_message.value("action", "");
-                    if (token == "wstream-ctrl-dev") {
-                        if (action == "shutdown") {
-                            is_running.store(false);
-                        } else if (action == "status") {
-                            nlohmann::json resp;
-                            resp["type"] = "status";
-                            resp["running"] = is_running.load();
-                            resp["clients"] = state->is_client_connected();
-                            ws.text(true);
-                            ws.write(net::buffer(resp.dump()));
-                        }
-                    }
+            // nlohmann::json::value("k", default) throws type_error if the
+            // key exists with an incompatible type (e.g. {"type":[]}). Wrap
+            // all field extraction so a malformed-but-valid-JSON message
+            // cannot tear down the session.
+            try {
+
+            const std::string type = json_message.value("type", "");
+
+            if (type == "reset") {
+                // Reset implementation (no-op for now).
+
+            } else if (type == "diagnostic") {
+                // Privileged: requires control token.
+                if (control_token.empty() ||
+                    !secure_compare(json_message.value("token", ""), control_token)) {
+                    nlohmann::json err;
+                    err["type"]  = "error";
+                    err["error"] = "unauthorised";
+                    send_json(ws, write_mtx, err);
+                    continue;
                 }
-            } catch (const nlohmann::json::exception& e) {
-                // Handle JSON parsing error
-                std::cerr << "JSON parsing error: " << e.what() << std::endl;
+                std::string host = json_message.value("host", "localhost");
+                if (!is_safe_host(host)) {
+                    nlohmann::json err;
+                    err["type"]  = "error";
+                    err["error"] = "invalid host";
+                    send_json(ws, write_mtx, err);
+                    continue;
+                }
+                nlohmann::json resp;
+                resp["type"]   = "diagnostic_result";
+                resp["output"] = run_ping(host);
+                send_json(ws, write_mtx, resp);
+
+            } else if (type == "fetch_transcript") {
+                std::string filename = json_message.value("file", "");
+                std::string contents, errmsg;
+                nlohmann::json resp;
+                if (read_transcript_file(filename, contents, errmsg)) {
+                    resp["type"]    = "transcript_content";
+                    resp["file"]    = filename;
+                    resp["content"] = contents;
+                } else {
+                    resp["type"]  = "error";
+                    resp["error"] = errmsg;
+                }
+                send_json(ws, write_mtx, resp);
+
+            } else if (type == "inject") {
+                // Privileged: arbitrary broadcast to every client. Without a
+                // token gate any client could spoof transcription output.
+                if (control_token.empty() ||
+                    !secure_compare(json_message.value("token", ""), control_token)) {
+                    nlohmann::json err;
+                    err["type"]  = "error";
+                    err["error"] = "unauthorised";
+                    send_json(ws, write_mtx, err);
+                    continue;
+                }
+                std::string text = json_message.value("text", "");
+                if (!text.empty() && text.size() <= 4096) {
+                    state->broadcast(text);
+                }
+
+            } else if (type == "control") {
+                std::string token  = json_message.value("token", "");
+                std::string action = json_message.value("action", "");
+                if (control_token.empty() ||
+                    !secure_compare(token, control_token)) {
+                    nlohmann::json err;
+                    err["type"]  = "error";
+                    err["error"] = "unauthorised";
+                    send_json(ws, write_mtx, err);
+                    continue;
+                }
+                if (action == "shutdown") {
+                    is_running.store(false);
+                } else if (action == "status") {
+                    nlohmann::json resp;
+                    resp["type"]    = "status";
+                    resp["running"] = is_running.load();
+                    resp["clients"] = state->client_count();
+                    send_json(ws, write_mtx, resp);
+                }
+            }
+
+            } catch (const nlohmann::json::exception&) {
+                nlohmann::json err;
+                err["type"]  = "error";
+                err["error"] = "invalid field type";
+                send_json(ws, write_mtx, err);
             }
         }
     } catch (beast::system_error const& se) {
@@ -402,19 +684,36 @@ void do_session(tcp::socket socket, std::shared_ptr<shared_state> state) {
         std::cerr << "WebSocket Error: " << e.what() << std::endl;
     }
 
-    // Remove the client from the connections set
-    state->leave(&ws);
+    // Mark dead and deregister *before* ws is destroyed so that any in-flight
+    // broadcast() sees alive==false and skips this stream.
+    state->leave(handle);
 }
 
 // WebSocket server thread
+//
+// By default the server binds to the loopback interface only. Set the
+// environment variable WSTREAM_BIND (e.g. "0.0.0.0") to expose it on other
+// interfaces, and WSTREAM_PORT to change the port. Binding to loopback by
+// default prevents unauthenticated access from the local network.
 void websocket_server(std::shared_ptr<shared_state> state, net::io_context& ioc) {
     try {
-        tcp::acceptor acceptor{ioc, {tcp::v4(), 8080}};
+        const char* bind_env = std::getenv("WSTREAM_BIND");
+        const char* port_env = std::getenv("WSTREAM_PORT");
+        std::string bind_addr = bind_env ? bind_env : "127.0.0.1";
+        unsigned short port = 8080;
+        if (port_env) {
+            try { port = static_cast<unsigned short>(std::stoi(port_env)); }
+            catch (...) { port = 8080; }
+        }
+
+        tcp::endpoint ep{net::ip::make_address(bind_addr), port};
+        tcp::acceptor acceptor{ioc, ep};
 
         // Set options for better connection handling
         acceptor.set_option(tcp::acceptor::reuse_address(true));
 
-        std::cout << "WebSocket server is running on port 8080..." << std::endl;
+        std::cout << "WebSocket server listening on "
+                  << bind_addr << ":" << port << std::endl;
 
         std::function<void()> do_accept;
         do_accept = [&] {

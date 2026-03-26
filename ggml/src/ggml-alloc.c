@@ -149,7 +149,9 @@ static void ggml_dyn_tallocr_insert_block(struct tallocr_chunk * chunk, size_t o
 
 static void ggml_dyn_tallocr_remove_block(struct tallocr_chunk * chunk, int idx) {
     // shift all elements after idx by 1 to the left, overwriting the element at idx
-    for (int i = idx; i < chunk->n_free_blocks; i++) {
+    // NB: upper bound is n_free_blocks-1 so the last read is free_blocks[n_free_blocks-1];
+    // the previous bound of n_free_blocks read one past the array when it was full.
+    for (int i = idx; i < chunk->n_free_blocks - 1; i++) {
         chunk->free_blocks[i] = chunk->free_blocks[i+1];
     }
     chunk->n_free_blocks--;
@@ -160,6 +162,10 @@ static int ggml_dyn_tallocr_new_chunk(struct ggml_dyn_tallocr * alloc, size_t mi
         return -1;
     }
     struct tallocr_chunk * chunk = calloc(1, sizeof(struct tallocr_chunk));
+    if (chunk == NULL) {
+        GGML_LOG_ERROR("%s: calloc failed for tallocr_chunk\n", __func__);
+        return -1;
+    }
     chunk->n_free_blocks = 1;
     chunk->free_blocks[0].offset = 0;
     // available space in a chunk is limited to max_chunk_size, but can be higher if:
