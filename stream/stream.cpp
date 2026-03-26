@@ -293,7 +293,7 @@ public:
     }
 };
 
-// WebSocket session handler (optimized)
+// WebSocket session handler (optimized for low-latency transcription delivery)
 void do_session(tcp::socket socket, std::shared_ptr<shared_state> state) {
     websocket::stream<tcp::socket> ws{std::move(socket)};
     try {
