@@ -6,6 +6,11 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
+// GGML_KQ_MASK_PAD was removed from ggml.h; define locally to match FATTN_KQ_STRIDE
+#ifndef GGML_KQ_MASK_PAD
+#define GGML_KQ_MASK_PAD 256
+#endif
+
 #ifdef WHISPER_USE_COREML
 #include "coreml/whisper-encoder.h"
 #endif

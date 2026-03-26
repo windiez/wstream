@@ -20,7 +20,7 @@ static __global__ void flash_attn_vec_ext_f32(
         const float m1,
         const uint32_t n_head_log2,
         const float logit_softcap,
-        const int32_t ne00, const int32_t ne01, const int32_t ne02, const int32_t ne03,
+        const int32_t ne00, const uint3   ne01, const int32_t ne02, const int32_t ne03,
                             const int32_t nb01, const int32_t nb02, const int32_t nb03,
         const int32_t ne10, const int32_t ne11, const int32_t ne12, const int32_t ne13,
                             const int32_t nb11, const int32_t nb12, const int64_t nb13,
@@ -112,7 +112,7 @@ static __global__ void flash_attn_vec_ext_f32(
             float2 * tmp_q_ds  = (float2 *) (tmp_q_i32 + D/sizeof(int));
 
             // Set memory to zero if out of bounds:
-            if (ncols > 2 && ic0 + j >= ne01) {
+            if (ncols > 2 && ic0 + j >= (int32_t)ne01.z) {
 #pragma unroll
                 for (int i0 = 0; i0 < int(D/sizeof(int)); i0 += WARP_SIZE) {
                     const int i = i0 + threadIdx.x;
@@ -157,7 +157,7 @@ static __global__ void flash_attn_vec_ext_f32(
             for (int i0 = 0; i0 < D/2; i0 += WARP_SIZE) {
                 const int i = i0 + threadIdx.x;
 
-                Q_f2[j][i0/WARP_SIZE]    = ncols <= 2 || ic0 + j < ne01 ? Q_f2_j[i] : make_float2(0.0f, 0.0f);
+                Q_f2[j][i0/WARP_SIZE]    = ncols <= 2 || ic0 + j < (int32_t)ne01.z ? Q_f2_j[i] : make_float2(0.0f, 0.0f);
                 Q_f2[j][i0/WARP_SIZE].x *= scale;
                 Q_f2[j][i0/WARP_SIZE].y *= scale;
             }
@@ -258,7 +258,7 @@ static __global__ void flash_attn_vec_ext_f32(
 
 #pragma unroll
     for (int j_VKQ = 0; j_VKQ < ncols; ++j_VKQ) {
-        if (ncols > 2 && ic0 + j_VKQ >= ne01) {
+        if (ncols > 2 && ic0 + j_VKQ >= (int32_t)ne01.z) {
             break;
         }
 
@@ -273,7 +273,7 @@ static __global__ void flash_attn_vec_ext_f32(
         dst[j_dst*D*gridDim.z + D*blockIdx.z + tid] = dst_val;
     }
 
-    if (gridDim.y != 1 && tid < ncols && (ncols <= 2 || ic0 + tid < ne01)) {
+    if (gridDim.y != 1 && tid < ncols && (ncols <= 2 || ic0 + tid < (int32_t)ne01.z)) {
         dst_meta[((ic0 + tid)*gridDim.z + blockIdx.z) * gridDim.y + blockIdx.y] = make_float2(kqmax[tid], kqsum[tid]);
     }
 #else

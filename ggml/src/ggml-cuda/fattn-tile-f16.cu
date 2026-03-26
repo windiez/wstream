@@ -23,7 +23,7 @@ static __global__ void flash_attn_tile_ext_f16(
         const float m1,
         const uint32_t n_head_log2,
         const float logit_softcap,
-        const int32_t ne00, const int32_t ne01, const int32_t ne02, const int32_t ne03,
+        const int32_t ne00, const uint3   ne01, const int32_t ne02, const int32_t ne03,
                             const int32_t nb01, const int32_t nb02, const int32_t nb03,
         const int32_t ne10, const int32_t ne11, const int32_t ne12, const int32_t ne13,
                             const int32_t nb11, const int32_t nb12, const int64_t nb13,
@@ -97,7 +97,7 @@ static __global__ void flash_attn_tile_ext_f16(
         for (int i0 = 0; i0 < D/2; i0 += WARP_SIZE) {
             const int i = i0 + threadIdx.x;
 
-            const float2 tmp = ic0 + j < ne01 ? Q_f2[j*(nb01/sizeof(float2)) + i] : make_float2(0.0f, 0.0f);
+            const float2 tmp = ic0 + j < (int32_t)ne01.z ? Q_f2[j*(nb01/sizeof(float2)) + i] : make_float2(0.0f, 0.0f);
             Q_h2[j][i] = make_half2(scale, scale) * make_half2(tmp.x, tmp.y);
         }
     }
@@ -257,7 +257,7 @@ static __global__ void flash_attn_tile_ext_f16(
     for (int j_VKQ_0 = 0; j_VKQ_0 < ncols; j_VKQ_0 += nwarps) {
         const int j_VKQ = j_VKQ_0 + threadIdx.y;
 
-        if (ic0 + j_VKQ >= ne01) {
+        if (ic0 + j_VKQ >= (int32_t)ne01.z) {
             return;
         }
 
